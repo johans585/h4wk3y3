@@ -33,7 +33,9 @@ services:
       POSTGRES_DB:       ${POSTGRES_DB:-h4wk3y3}
       POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=en-US"
     volumes:
-      - h4wk3y3-postgres-data:/var/lib/postgresql/data
+      # postgres:18+ stores data in a version-specific subdir → mount the
+      # parent /var/lib/postgresql (NOT /data, which the 18 image rejects).
+      - h4wk3y3-postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-h4wk3y3} -d ${POSTGRES_DB:-h4wk3y3}"]
       interval: 5s
