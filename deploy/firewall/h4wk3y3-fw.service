@@ -1,0 +1,15 @@
+[Unit]
+Description=h4wk3y3 firewall — allow 443 into Docker's DOCKER-USER chain
+# Run after Docker is up (DOCKER-USER exists). PartOf + WantedBy=docker.service
+# so a `systemctl restart docker` re-applies the rule (Docker flushes it).
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/h4wk3y3-fw.sh
+
+[Install]
+WantedBy=multi-user.target docker.service
