@@ -1,0 +1,87 @@
+entity,apex
+ABMED,abmed.bj
+ADET,adet.bj
+ADPME,"adpme.bj,faen.gouv.bj"
+AGENCE Pénitentiare,agencepenitentiaire.bj
+AGLO,"aglo.bj,presidence.bj"
+ANAC,anac.bj
+ANAT,anat.bj
+ANATT,"anatt.bj,anatt.gouv.bj"
+ANDF,"andf.bj,cadastre.bj"
+ANIP,anip.bj
+ANM,"anm.bj,vignetika.gouv.bj"
+ANPE,anpe.bj
+ANPT,anpt.bj
+APDP,apdp.bj
+APIEX,"apiex.bj,investbenin.bj,monentreprise.bj"
+ARCEP,arcep.bj
+ASIN,"asin.bj,bip.gouv.bj,bjidoc.gouv.bj,cnhu-consult.gouv.bj,emploi-pipeline.gouv.bj,evisa.bj,fichiernational.gouv.bj,gitlab.gouv.bj,hackerlab.bj,lyoko.gouv.bj,mooc.gouv.bj,mrs.gouv.bj,ocoa.gouv.bj,odd.gouv.bj,oddbenin.gouv.bj,pare.gouv.bj,pitn2r.gouv.bj,presencepublic.gouv.bj,primero.gouv.bj,sigcfs.gouv.bj,sigodd.gouv.bj,sysformation.gouv.bj,test.gouv.bj,tradux.gouv.bj,visio.gouv.bj,www.gouv.bj,xroad.bj"
+ASIN/PKI,"anssi.bj,identite-numerique.bj,identite-numerique.gouv.bj"
+Assemblée Nationale,assemblee-nationale.bj
+Benin Tourisme,benintourisme.bj
+bjCSIRT,csirt.bj
+BNB,bnb.bj
+CAGD/MEF,cagd.bj
+CDCB,cdcb.bj
+CENA,cena.bj
+CENTIF,centif.bj
+CES,ces.bj
+CNIN,cnin.bj
+CNSS,cnss.bj
+Cours Constitutionnelle,courconstitutionnelle.bj
+Cours Suprème,coursupreme.bj
+DGI,finances.bj
+DGPR,"dei.gouv.bj,dgpr.bj"
+DGTCP,tresorbenin.bj
+DOUANES,douanes.gouv.bj
+FDA,fda.bj
+FNDA,"agriculture.gouv.bj,fnda.bj"
+FNM,fnm.bj
+FSS/UAC,"etudiant.bj,uac.bj"
+GUCE,guce.gouv.bj
+IGN,"geobenin.bj,ign.bj"
+IMSP/UAC,imsp-benin.com
+INSTAD,instad.bj
+JenySAS,"jenysas.bj,nic.bj"
+LaPOSTE,laposte.bj
+LNB,"lnbpari.com,loteriebenin.bj"
+MAE,diplomatie.gouv.bj
+MAEP,"agriconseil.gouv.bj,agriculture.gouv.bj,emagro.gouv.bj"
+MAIRIE NIKKI,mairienikki.bj
+MASM,social.gouv.bj
+MCVT,"cadredevie.gouv.bj,eforex.gouv.bj,fnec-benin.org,siseb.gouv.bj"
+MDGL,"cefal.gouv.bj,decentralisation.gouv.bj,ecefal.gouv.bj,pspdb.gouv.bj"
+MDN,defense.bj
+MEDIATEUR,mediateur.bj
+MEEM,"are.bj,direction-energie.gouv.bj,eau-mines.gouv.bj,ressources-eau.gouv.bj"
+MEF,"admin-ocoa.gouv.bj,controlefinancier.bj,dgml.bj,finances.bj,finances.gouv.bj,impots.bj,marches-publics.bj,mprofinancesmtfp.gouv.bj,pgip.gouv.bj"
+MEMP,memp.gouv.bj
+MESRS,"apresmonbac.bj,bac.bj,csirt.gouv.bj,enseignementsuperieur.bj,enseignementsuperieur.gouv.bj,officedubacbenin.bj,univ-parakou.bj"
+MESRS/Eresultats,eresultats.bj
+MESTFP,"educmaster.bj,enseignementsecondaire.gouv.bj"
+METEO BENIN,meteobenin.bj
+MIC,"commerce.gouv.bj,industrie.gouv.bj"
+MISP,"abegief.bj,interieur.gouv.bj,sigaf.gouv.bj"
+MJL,"agencepenitentiaire.bj,barreaudubenin.bj,defense.bj,efpj.bj,justice.bj,justice.gouv.bj"
+MND,"ecolenumerique.bj,identite-numerique.bj,numerique.gouv.bj,sae-mnd.gouv.bj,semainedunumerique.bj,senia.bj"
+MOOV,moov-africa.bj
+MPD,"developpement.gouv.bj,sgifd.gouv.bj"
+MPMEPE,pmepe.gouv.bj
+MS,"eformation-sante.gouv.bj,emploisante.gouv.bj,gpa-sante.gouv.bj,passsanitaire.gouv.bj,rep-sante.gouv.bj,sanipriva.gouv.bj,sante.gouv.bj,sig-ssrd.gouv.bj,snigs.gouv.bj,suivi-pvv.gouv.bj"
+MTCA,"bubedra.bj,palaisroyauxabomey.bj,siges-tourisme.gouv.bj,tourisme.gouv.bj"
+MTFP,"courrierigsep.gouv.bj,demarchesmtfp.gouv.bj,evad.gouv.bj,guvmtfp.gouv.bj,maindoeuvre.gouv.bj,managemtfp.gouv.bj,mataccueil.gouv.bj,matieresfp.gouv.bj,onlinebackofficemtfp.gouv.bj,pmamtfp.gouv.bj,preprodmtfp.gouv.bj,reformesbenin.gouv.bj,sigrh.gouv.bj,travail.gouv.bj"
+PAC,"besc.bj,portcotonou.com,portdecotonou.bj"
+PRESIDENCE,"ansr.gouv.bj,asfep.gouv.bj,ask.gouv.bj,beninrevele.bj,cnls-tp.gouv.bj,denonciation.bj,evaluation.gouv.bj,presidence.bj,sgg.gouv.bj"
+SAB,aeroport-cotonou.bj
+SBEE,sbee.bj
+SBIN,"celtiis.bj,sbin.bj"
+SBIR,tnt.bj
+SBPE,sbpe.bj
+SEGUB,segub.bj
+Service-public/ASIN,service-public.bj
+SGDS,sgds.bj
+SIRAT,sirat.bj
+SONEB,soneb.bj
+SRTB,srtb.bj
+Sèmè-City,semecity.bj
+UNA,una.bj

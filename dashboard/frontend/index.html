@@ -1,0 +1,1033 @@
+<!DOCTYPE html>
+<html lang="en" data-screen-label="h4wk3y3 / Ops Center">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>h4wk3y3 — Ops Center</title>
+  <link rel="icon" type="image/svg+xml" href="/ui/favicon.svg"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="styles.css"/>
+  <style>
+    /* App-level loading + error states */
+    #boot{
+      position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+      flex-direction:column;gap:14px;color:var(--text-dim,#7a8597);
+      font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;
+      letter-spacing:.14em;text-transform:uppercase;z-index:5;
+    }
+    #boot .spin{
+      width:34px;height:34px;border-radius:50%;
+      border:1.5px solid rgba(255,255,255,.08);
+      border-top-color:var(--accent,#5be7a9);
+      animation:argus-spin 1s linear infinite;
+    }
+    @keyframes argus-spin{to{transform:rotate(360deg)}}
+    #boot .err{color:var(--sev-critical,#ff5e62)}
+  </style>
+  <script>
+    // Apply persisted theme BEFORE first paint to avoid a dark→light flash.
+    try {
+      var __t = localStorage.getItem("argus.theme") || "dark";
+      document.documentElement.setAttribute("data-theme", __t);
+    } catch (_) { document.documentElement.setAttribute("data-theme", "dark"); }
+  </script>
+</head>
+<body>
+  <div class="bg-layer bg-radial"></div>
+  <div class="bg-layer bg-grid"></div>
+  <div class="bg-layer bg-scanlines"></div>
+  <div class="bg-layer bg-vignette"></div>
+
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+  <script src="api.js"></script>
+  <script type="text/babel" src="icons.jsx"></script>
+  <script type="text/babel" src="primitives.jsx"></script>
+  <script type="text/babel" src="pages.jsx"></script>
+  <script type="text/babel" src="pages-extra.jsx"></script>
+  <script type="text/babel" src="admin-pages.jsx"></script>
+  <script type="text/babel" src="scan-ui.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "accentHue": 188,
+      "density": "normal",
+      "showGradient": true,
+      "glassChrome": true,
+      "showScanlines": false,
+      "showGrid": false
+    }/*EDITMODE-END*/;
+
+    // Nav: counts/badges are recomputed live from `data` in CommandBar.
+    const NAV_LAYOUT = [
+      { section: "OVERVIEW", items: [
+        { id: "dashboard",       label: "Dashboard",  icon: "layout-dashboard" },
+      ]},
+      { section: "ASSETS", items: [
+        { id: "subdomains",      label: "Subdomains", icon: "globe",       countKey: "subdomains" },
+        { id: "live-hosts",      label: "Hosts",      icon: "server",      countKey: "liveHosts" },
+        { id: "technologies",    label: "Technologies", icon: "cpu" },
+        { id: "screenshots",     label: "Screenshots",  icon: "image" },
+      ]},
+      { section: "CONTENT", items: [
+        { id: "urls",            label: "URLs",       icon: "link",        countKey: "urls" },
+        { id: "js-analysis",     label: "JS",         icon: "code" },
+        { id: "source-viewer",   label: "Source",     icon: "file-code" },
+      ]},
+      { section: "SECURITY", items: [
+        { id: "findings",        label: "Findings",   icon: "alert-triangle", countKey: "findings", critKey: "critical" },
+        { id: "cves",            label: "CVEs",       icon: "shield" },
+        { id: "active",          label: "Active",     icon: "lightning" },
+        { id: "checks",          label: "Checks",     icon: "shield-alert" },
+        { id: "attack-surface",  label: "Attack Surface", icon: "target" },
+      ]},
+      { section: "SYSTEM", items: [
+        { id: "config",          label: "Config",     icon: "settings", minRole: "super-admin" },
+        { id: "docs",            label: "Docs",       icon: "book" },
+      ]},
+      // Auth-conditional. Sidebar filters items by `minRole` against the
+      // logged-in user (set via /api/auth/me).
+      { section: "ADMIN", items: [
+        { id: "users",           label: "Users",      icon: "users",  minRole: "super-admin" },
+        { id: "orgs",            label: "Orgs",       icon: "building", minRole: "admin" },
+        { id: "audit",           label: "Audit Log",  icon: "list",   minRole: "admin" },
+      ]},
+    ];
+
+    // Exposed on window so external babel-compiled scripts (admin-pages.jsx,
+    // pages.jsx, …) can use the same role-rank helpers without redeclaring them.
+    window.ROLE_RANK = { "user": 1, "admin": 2, "super-admin": 3 };
+    window.roleMeets = (actual, required) => (window.ROLE_RANK[actual] || 0) >= (window.ROLE_RANK[required] || 99);
+    const ROLE_RANK = window.ROLE_RANK;
+    const roleMeets = window.roleMeets;
+
+    const fmtCount = (n) => {
+      if (n == null) return null;
+      if (n >= 1000) return (n/1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/,"") + "k";
+      return n;
+    };
+
+    // Map active page id → human title for the topbar.
+    const PAGE_TITLES = {
+      "dashboard":      ["OVERVIEW", "Mission Dashboard"],
+      "subdomains":     ["ASSETS",   "Subdomains"],
+      "live-hosts":     ["ASSETS",   "Live Hosts"],
+      "technologies":   ["ASSETS",   "Technologies"],
+      "screenshots":    ["ASSETS",   "Screenshots"],
+      "urls":           ["CONTENT",  "URLs"],
+      "js-analysis":    ["CONTENT",  "JS Analysis"],
+      "source-viewer":  ["CONTENT",  "Source Viewer"],
+      "findings":       ["SECURITY", "Findings"],
+      "gf-patterns":    ["SECURITY", "GF Patterns"],
+      "active":         ["SECURITY", "Active Validation"],
+      "takeovers":      ["SECURITY", "Subdomain Takeovers"],
+      "email-security": ["SECURITY", "Email Security"],
+      "api-specs":      ["SECURITY", "API Specs"],
+      "attack-surface": ["SECURITY", "Attack Surface"],
+      "config":         ["SYSTEM",   "Configuration"],
+      "docs":           ["SYSTEM",   "Documentation"],
+      "users":          ["ADMIN",    "User management"],
+      "orgs":           ["ADMIN",    "Organisations"],
+      "audit":          ["ADMIN",    "Audit log"],
+    };
+
+    function OrgSelector({ orgs, currentOrg, onChange, onNav, canManage }) {
+      // Compact searchable combo-box (replaces the previous native <select>
+      // which became unusable with 80+ orgs). Same pattern as TopBar
+      // target selector for UX consistency: click trigger → dropdown with
+      // search input + filtered list. Closes on outside click / Esc.
+      const [open, setOpen] = useState(false);
+      const [q, setQ]       = useState("");
+      const ref = useRef(null);
+
+      useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+        const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+        document.addEventListener("mousedown", onDoc);
+        document.addEventListener("keydown",   onKey);
+        return () => {
+          document.removeEventListener("mousedown", onDoc);
+          document.removeEventListener("keydown",   onKey);
+        };
+      }, [open]);
+
+      // Wipe the filter when closing — so reopen starts fresh.
+      useEffect(() => { if (!open) setQ(""); }, [open]);
+
+      const filtered = useMemo(() => {
+        const term = q.trim().toLowerCase();
+        if (!term) return orgs || [];
+        return (orgs || []).filter(o =>
+          (o.name || "").toLowerCase().includes(term)
+        );
+      }, [orgs, q]);
+
+      const current = (orgs || []).find(o => o.name === currentOrg);
+      const triggerLabel = currentOrg
+        ? `${currentOrg}${current ? ` (${current.target_count || 0})` : ""}`
+        : "— All orgs —";
+
+      const empty = !orgs || orgs.length === 0;
+
+      return (
+        <div className="sidebar-org">
+          <div className="sidebar-org-row">
+            <label className="sidebar-org-label">ORGANISATION</label>
+            {canManage && (
+              <a
+                className="sidebar-org-manage"
+                href="#orgs"
+                onClick={(e) => { e.preventDefault(); onNav?.("orgs"); }}
+                title="Manage organisations"
+              >Manage</a>
+            )}
+          </div>
+          {empty ? (
+            <div className="sidebar-org-empty">
+              No organisation yet
+              {canManage && <> — <a href="#orgs" onClick={(e) => {
+                e.preventDefault(); onNav?.("orgs");
+              }}>create one</a></>}
+            </div>
+          ) : (
+            <div className="sidebar-org-combo" ref={ref}>
+              <div className="sidebar-org-trigger"
+                   onClick={() => setOpen(o => !o)}
+                   title="Filter targets and findings by organisation">
+                <span className="sidebar-org-current">{triggerLabel}</span>
+                <Icon name="chevron-down" size={11}/>
+              </div>
+              {open && (
+                <div className="sidebar-org-dropdown">
+                  <input className="sidebar-org-search"
+                         placeholder={`search ${orgs.length} orgs…`}
+                         value={q}
+                         onChange={(e) => setQ(e.target.value)}
+                         autoFocus/>
+                  <div className="sidebar-org-list">
+                    <div className={`sidebar-org-option ${!currentOrg ? "active" : ""}`}
+                         onClick={() => { onChange(null); setOpen(false); }}>
+                      <span className="muted">— All orgs —</span>
+                      {!currentOrg && <span className="sidebar-org-check">✓</span>}
+                    </div>
+                    {filtered.length === 0 ? (
+                      <div className="sidebar-org-option"
+                           style={{opacity:.5,cursor:"default"}}>
+                        no match
+                      </div>
+                    ) : filtered.map(o => (
+                      <div key={o.name}
+                           className={`sidebar-org-option ${o.name === currentOrg ? "active" : ""}`}
+                           onClick={() => { onChange(o.name); setOpen(false); }}>
+                        <span className="sidebar-org-name">{o.name}</span>
+                        <span className="sidebar-org-count">{o.target_count || 0}</span>
+                        {o.name === currentOrg && <span className="sidebar-org-check">✓</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function Sidebar({ active, onNav, data, sidebarOpen, setSidebarOpen, me,
+                       orgs, currentOrg, onOrgChange }) {
+      // Navigation does NOT auto-close the sidebar — only the user can close
+      // it (brand click, FAB toggle, Ctrl+B, Esc). Keeps the menu pinned for
+      // multi-page exploration.
+      const handleNav = (id) => { onNav(id); };
+      // Filter NAV_LAYOUT items by minRole vs the logged-in user.
+      const navForUser = NAV_LAYOUT
+        .map(s => ({
+          ...s,
+          items: s.items.filter(it => !it.minRole || (me && roleMeets(me.role, it.minRole)))
+        }))
+        .filter(s => s.items.length > 0);
+      return (
+        <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
+          <div
+            className="sidebar-brand"
+            onClick={() => setSidebarOpen(false)}
+            role="button"
+            aria-label="Hide sidebar"
+            title="Click to hide menu"
+          >
+            <div className="brand-mark-v2">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+                <circle cx="12" cy="12" r="9"/>
+                <circle cx="12" cy="12" r="4.5"/>
+                <circle cx="12" cy="12" r="1.2" fill="currentColor"/>
+                <path d="M12 1v3M12 20v3M1 12h3M20 12h3"/>
+              </svg>
+            </div>
+            <div className="brand-block">
+              <div className="brand-name-v2">h4wk3y3</div>
+            </div>
+          </div>
+
+          <OrgSelector
+            orgs={orgs}
+            currentOrg={currentOrg}
+            onChange={onOrgChange}
+            onNav={onNav}
+            canManage={me && roleMeets(me.role, "admin")}
+          />
+
+          <nav className="sidebar-nav">
+            {navForUser.map(s => (
+              <div key={s.section} className="sidebar-section">
+                <div className="sidebar-section-label">{s.section}</div>
+                {s.items.map(it => {
+                  const count = it.countKey
+                    ? (it.countKey === "liveHosts" ? data.liveHosts.length
+                      : it.countKey === "subdomains" ? data.subdomains.length
+                      : it.countKey === "findings" ? data.findings.length
+                      : it.countKey === "urls" ? data.stats.urls
+                      : null)
+                    : null;
+                  const crit = it.critKey ? data.counts[it.critKey] : null;
+                  return (
+                    <div
+                      key={it.id}
+                      className={`sidebar-item ${active === it.id ? "active" : ""} ${crit > 0 ? "has-crit" : ""}`}
+                      onClick={() => handleNav(it.id)}
+                      title={it.label}
+                    >
+                      <Icon name={it.icon}/>
+                      <span className="label">{it.label}</span>
+                      {crit > 0 && <span className="nav-badge crit">{crit}</span>}
+                      {count != null && !crit && <span className="nav-badge">{fmtCount(count)}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+        </aside>
+      );
+    }
+
+    // Pages where the TopBar's target-contextual block (SCAN button, target
+    // selector, reload, delete) is hidden — these pages manage global or
+    // cross-target entities, not a specific scan target.
+    //   - orgs/users/audit/config/docs : pure global
+    //   - cves : CVE catalogue + matches across all orgs (uses currentOrg filter)
+    //   - attack-surface : cross-target hosts inventory (uses currentOrg filter)
+    const GLOBAL_PAGES = new Set([
+      "orgs", "users", "audit", "config", "docs",
+      "cves", "attack-surface",
+    ]);
+
+    function TopBar({ active, target, targets, onSelectTarget, onDelete, onReload, onLaunchScan, sidebarOpen, setSidebarOpen, activeScans, onOpenRun, loading, me }) {
+      // Role gates: admin+ for scan launch / domain delete; super-admin for nothing extra here.
+      const canScan = me && roleMeets(me.role, "admin");
+      const canDelete = me && roleMeets(me.role, "admin");
+      const isGlobalPage = GLOBAL_PAGES.has(active);
+      const [open, setOpen] = useState(false);
+      const [q, setQ] = useState("");
+      const ref = useRef(null);
+      useEffect(() => {
+        const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+        document.addEventListener("mousedown", onClick);
+        return () => document.removeEventListener("mousedown", onClick);
+      }, []);
+      const filtered = targets.filter(t => t.toLowerCase().includes(q.toLowerCase()));
+      const [crumb, title] = PAGE_TITLES[active] || ["—", "—"];
+
+      return (
+        <header className="topbar">
+          <button className="cmd-hamburger" onClick={() => setSidebarOpen(!sidebarOpen)} aria-label="Toggle menu" title="Toggle menu (Ctrl+B)">
+            <Icon name={sidebarOpen ? "x" : "menu"}/>
+          </button>
+          <div className="topbar-title"><span className="crumb">{crumb} ·</span>{title}</div>
+          <div className="topbar-actions">
+            <ScanIndicator active={activeScans} onOpenRun={onOpenRun}/>
+            {!isGlobalPage && canScan && (
+              <button className="cmd-btn cmd-btn-primary" onClick={onLaunchScan} title="Initiate new scan">
+                <Icon name="play" size={12}/><span>SCAN</span>
+              </button>
+            )}
+            {!isGlobalPage && (
+              <div className="target-selector" ref={ref}>
+                <div className="target-trigger" onClick={() => setOpen(!open)}>
+                  <span className="target-dot-v2"></span>
+                  <span className="label">TGT</span>
+                  <span>{target || "no target"}</span>
+                  <Icon name="chevron-down" size={12}/>
+                </div>
+                {open && (
+                  <div className="target-dropdown-v2">
+                    <input placeholder="search targets..." value={q} onChange={e => setQ(e.target.value)} autoFocus/>
+                    {filtered.length === 0 && (
+                      <div className="target-option-v2" style={{opacity:.5,cursor:"default"}}>
+                        <span>{targets.length ? "no match" : "no scans yet"}</span>
+                      </div>
+                    )}
+                    {filtered.map(t => (
+                      <div
+                        key={t}
+                        className={`target-option-v2 ${t === target ? "active" : ""}`}
+                        onClick={() => { onSelectTarget(t); setOpen(false); }}
+                      >
+                        <span>{t}</span>
+                        {t === target && <span className="check">✓</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!isGlobalPage && (
+              <button className="cmd-btn" onClick={onReload} disabled={loading} title="Reload data">
+                <span style={{display:"inline-flex",animation: loading ? "argus-spin 0.9s linear infinite" : "none"}}>
+                  <Icon name="refresh" size={12}/>
+                </span>
+              </button>
+            )}
+            {!isGlobalPage && canDelete && (
+              <button className="cmd-btn cmd-btn-danger" onClick={onDelete} disabled={!target} title="Delete domain data"><Icon name="trash-2" size={12}/></button>
+            )}
+            <ThemeToggle/>
+            <UserBadge/>
+          </div>
+        </header>
+      );
+    }
+
+    // Theme toggle (sun / moon). Persists choice in localStorage; reads
+    // initial value at boot from <html data-theme>.
+    function ThemeToggle() {
+      const [theme, setThemeRaw] = useState(() =>
+        document.documentElement.getAttribute("data-theme") || "dark"
+      );
+      const setTheme = (t) => {
+        setThemeRaw(t);
+        document.documentElement.setAttribute("data-theme", t);
+        try { localStorage.setItem("argus.theme", t); } catch (_) {}
+      };
+      return (
+        <button className="cmd-btn"
+                title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+          <Icon name={theme === "dark" ? "sun" : "moon"} size={12}/>
+        </button>
+      );
+    }
+
+    function UserBadge() {
+      const [me, setMe] = useState(null);
+      useEffect(() => {
+        window.ArgusAPI.auth.me().then(setMe).catch(() => setMe(null));
+      }, []);
+      if (!me) return null;
+      const roleColor = {
+        "super-admin": "var(--sev-critical, #ff5e62)",
+        "admin":       "var(--accent, #5be7a9)",
+        "user":        "var(--text-dim, #7a8597)",
+      }[me.role] || "var(--text-dim)";
+      return (
+        <div style={{display:"inline-flex",alignItems:"center",gap:8,marginLeft:8,
+                     padding:"6px 10px",border:"1px solid var(--border)",borderRadius:6,
+                     background:"rgba(255,255,255,0.02)"}}>
+          <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"var(--text-dim)"}}>
+            {me.username}
+          </span>
+          <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:9,
+                        textTransform:"uppercase",letterSpacing:"0.08em",color:roleColor}}>
+            {me.role}
+          </span>
+          <button className="cmd-btn" style={{padding:"4px 8px",fontSize:10}}
+                  title="Sign out"
+                  onClick={() => window.ArgusAPI.auth.logout()}>
+            <Icon name="x" size={11}/>
+          </button>
+        </div>
+      );
+    }
+
+    // Load persisted tweaks from localStorage (overrides EDITMODE defaults).
+    let __initialTweaks = TWEAK_DEFAULTS;
+    try {
+      const saved = JSON.parse(localStorage.getItem("argus.tweaks") || "null");
+      if (saved && typeof saved === "object") __initialTweaks = { ...TWEAK_DEFAULTS, ...saved };
+    } catch (_) {}
+
+    function App() {
+      const [tweaks, setTweakRaw] = useTweaks(__initialTweaks);
+      const setTweak = useCallback((k, v) => {
+        setTweakRaw(k, v);
+        // Persist after change — read back the current values.
+        const next = typeof k === "object" ? { ...tweaks, ...k } : { ...tweaks, [k]: v };
+        try { localStorage.setItem("argus.tweaks", JSON.stringify(next)); } catch (_) {}
+      }, [tweaks, setTweakRaw]);
+      const [active, setActive] = useState(() => localStorage.getItem("argus.active") || "dashboard");
+      const [targets, setTargets] = useState([]);
+      const [target, setTargetRaw] = useState(null);
+      // Persist the active target across reloads so the same view is restored
+      // on F5. Used together with `argus.currentOrg` to decide the initial
+      // target at boot time (see the consolidated boot effect below).
+      const setTarget = useCallback((t) => {
+        setTargetRaw(t);
+        try {
+          if (t) localStorage.setItem("argus.currentTarget", t);
+          else   localStorage.removeItem("argus.currentTarget");
+        } catch (_) {}
+      }, []);
+      const [data, setData] = useState(window.ArgusAPI.emptyShape(null));
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+      const [selectedFinding, setSelectedFinding] = useState(null);
+      // Sidebar is now a drawer on every screen size — closed by default,
+      // opened by clicking the floating brand mark in the top-left. Pref
+      // persisted so a user who likes it always-open keeps it.
+      const [sidebarOpen, setSidebarOpenRaw] = useState(() => {
+        try { return localStorage.getItem("argus.sidebarOpen") === "1"; }
+        catch (_) { return false; }
+      });
+      const setSidebarOpen = useCallback((v) => {
+        const next = typeof v === "function" ? v(sidebarOpen) : v;
+        setSidebarOpenRaw(next);
+        try { localStorage.setItem("argus.sidebarOpen", next ? "1" : "0"); } catch (_) {}
+      }, [sidebarOpen]);
+      const [scanModalOpen, setScanModalOpen] = useState(false);
+      const [openRunId, setOpenRunId] = useState(null);
+      // Severity filter intent — set by PageDashboard sev cards, consumed
+      // by PageFindings on mount.
+      const [findingsSevIntent, setFindingsSevIntent] = useState(null);
+      const { active: activeScans } = useActiveScans(true);
+
+      // Logged-in user (drives sidebar item visibility + admin pages access)
+      const [me, setMe] = useState(null);
+      useEffect(() => {
+        window.ArgusAPI.auth.me().then(setMe).catch(() => setMe(null));
+      }, []);
+
+      // ── Multi-org (Étape 2.1) ────────────────────────────────
+      // currentOrg = name of the org filter active in the sidebar (null = all).
+      // Stored in localStorage so the choice persists across reloads.
+      const [orgs, setOrgs] = useState([]);
+      const [currentOrg, setCurrentOrgRaw] = useState(() => {
+        try { return localStorage.getItem("argus.currentOrg") || null; }
+        catch (_) { return null; }
+      });
+      const setCurrentOrg = useCallback((name) => {
+        setCurrentOrgRaw(name || null);
+        try {
+          if (name) localStorage.setItem("argus.currentOrg", name);
+          else      localStorage.removeItem("argus.currentOrg");
+        } catch (_) {}
+      }, []);
+
+      // Load orgs once at boot — best effort.
+      const reloadOrgs = useCallback(async () => {
+        try {
+          const list = await window.ArgusAPI.orgs.list();
+          setOrgs(list);
+          // If currentOrg points at a non-existent org, clear it.
+          if (currentOrg && !list.find(o => o.name === currentOrg)) {
+            setCurrentOrg(null);
+          }
+        } catch (_) { setOrgs([]); }
+      }, [currentOrg, setCurrentOrg]);
+      useEffect(() => { reloadOrgs(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+      // Expose for pages-extra.jsx PageOrgs to bust the cache after CRUD.
+      window.ArgusOrgsReload = reloadOrgs;
+
+      // Expose pour PageOrgDetail (et tout consumer hors App) : pré-remplit
+      // le ScanModal avec un target+org puis l'ouvre. Évite de propager des
+      // props à travers 3 niveaux pour un usage transverse.
+      window.openScanModal = ({ target: t, org } = {}) => {
+        if (t)   setTarget(t);
+        if (org) setCurrentOrg(org);
+        setScanModalOpen(true);
+      };
+
+      // Idem : focaliser la vue dashboard sur un target (sans relancer un
+      // scan). Utilisé par PageOrgDetail quand une row a déjà des findings.
+      window.viewTarget = (apex) => {
+        if (!apex) return;
+        setTarget(apex);
+        setActive("dashboard");
+      };
+
+      // orgTargets = apexes attached to currentOrg (null = no filter active).
+      // Hydrated by the consolidated boot effect below (and on currentOrg
+      // changes post-boot). We deliberately keep a single resolution path
+      // so the initial render doesn't flash an out-of-scope target.
+      const [orgTargets, setOrgTargets] = useState(null);
+      const [hydrated, setHydrated]     = useState(false);
+
+      // The list shown in the TopBar dropdown + chip ribbon.
+      const filteredTargets = (() => {
+        if (orgTargets == null) return targets;
+        const set = new Set(orgTargets);
+        return targets.filter(t => set.has(t));
+      })();
+
+      useEffect(() => { localStorage.setItem("argus.active", active); }, [active]);
+
+      // Apply tweaks to chrome
+      useEffect(() => {
+        document.documentElement.style.setProperty("--hue", tweaks.accentHue);
+        document.documentElement.dataset.density = tweaks.density;
+        const radial = document.querySelector(".bg-radial");
+        if (radial) radial.style.display = tweaks.showGradient ? "block" : "none";
+        const grid = document.querySelector(".bg-grid");
+        if (grid) grid.style.display = tweaks.showGrid ? "block" : "none";
+        const scan = document.querySelector(".bg-scanlines");
+        if (scan) scan.style.display = tweaks.showScanlines ? "block" : "none";
+        const filt = tweaks.glassChrome ? "blur(14px) saturate(160%)" : "none";
+        const cb = document.querySelector(".cmdbar");
+        if (cb) { cb.style.backdropFilter = filt; cb.style.webkitBackdropFilter = filt; }
+      }, [tweaks]);
+
+      // Keyboard shortcuts
+      useEffect(() => {
+        const onKey = (e) => {
+          if (e.key === "Escape") {
+            setSelectedFinding(null);
+            setSidebarOpen(false);
+          }
+          if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); setActive("findings"); }
+          if ((e.metaKey || e.ctrlKey) && e.key === "b") { e.preventDefault(); setSidebarOpen(o => !o); }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }, [setSidebarOpen]);
+
+      // Consolidated boot — wait for both the domains list AND (if an org
+      // filter is active in localStorage) the org's target apexes BEFORE
+      // picking the initial target. Avoids the previous race where the
+      // first alphabetical domain was selected before the org filter had a
+      // chance to apply, then the snap-effect kicked in too late and the
+      // user saw the wrong data flicker through.
+      useEffect(() => {
+        let cancelled = false;
+        (async () => {
+          try {
+            const [list, orgT] = await Promise.all([
+              window.ArgusAPI.listDomains(),
+              currentOrg
+                ? window.ArgusAPI.orgs.listTargets(currentOrg)
+                    .then(rows => rows.map(r => r.apex))
+                    .catch(() => [])
+                : Promise.resolve(null),
+            ]);
+            if (cancelled) return;
+            setTargets(list);
+            setOrgTargets(orgT);
+            // Restore last-viewed target if still compatible with the
+            // (possibly org-filtered) list; otherwise fall back to the
+            // first available one.
+            let saved = null;
+            try { saved = localStorage.getItem("argus.currentTarget"); } catch (_) {}
+            const avail = orgT == null ? list : list.filter(d => orgT.includes(d));
+            const initial = (saved && avail.includes(saved)) ? saved
+                            : (avail[0] || null);
+            setTarget(initial);
+            if (!initial) { setLoading(false); setData(window.ArgusAPI.emptyShape(null)); }
+          } catch (e) {
+            if (!cancelled) { setError(String(e)); setLoading(false); }
+          } finally {
+            if (!cancelled) setHydrated(true);
+          }
+        })();
+        return () => { cancelled = true; };
+      }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+      // Post-boot : when the user switches org from the sidebar, reload the
+      // org's apexes and reconcile the current target with the new filter.
+      useEffect(() => {
+        if (!hydrated) return;
+        let cancelled = false;
+        (async () => {
+          let orgT = null;
+          if (currentOrg) {
+            try {
+              const rows = await window.ArgusAPI.orgs.listTargets(currentOrg);
+              orgT = rows.map(r => r.apex);
+            } catch (_) { orgT = []; }
+          }
+          if (cancelled) return;
+          setOrgTargets(orgT);
+          const avail = orgT == null ? targets : targets.filter(d => orgT.includes(d));
+          // Keep the current target if still in scope; otherwise snap to
+          // the first available one (or null if the org is empty).
+          if (target && avail.includes(target)) return;
+          setTarget(avail[0] || null);
+        })();
+        return () => { cancelled = true; };
+      }, [currentOrg, hydrated]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+      // Load when target changes. _v bumps on each reload so lazy-loaded
+      // pages (keyed on data._v in <main>) refetch their endpoints. We read
+      // the previous _v via the setData callback form to avoid a self-trigger
+      // cycle when _v is in deps.
+      const reload = useCallback(async () => {
+        if (!target) return;
+        setLoading(true); setError(null);
+        try {
+          const d = await window.ArgusAPI.loadDomain(target);
+          d.targets = targets;
+          setData(prev => ({ ...d, _v: (prev?._v || 0) + 1 }));
+        } catch (e) {
+          setError(String(e));
+        } finally {
+          setLoading(false);
+        }
+      }, [target, targets]);
+
+      useEffect(() => { reload(); }, [reload]);
+
+      const handleRerun = useCallback(async () => {
+        if (!target) return;
+        try {
+          const run = await window.ArgusAPI.scan.start(target, "full");
+          setOpenRunId(run.id);
+        } catch (e) {
+          alert("Re-run failed: " + (e.message || e));
+        }
+      }, [target]);
+
+      // Selected org for PageOrgDetail (Phase 2 unified). null = liste.
+      // Synced with location.hash → #/org/<name> for bookmark/reload.
+      const [selectedOrg, setSelectedOrgRaw] = useState(null);
+      const setSelectedOrg = useCallback((name) => {
+        setSelectedOrgRaw(name || null);
+        try {
+          if (name) window.location.hash = `#/org/${encodeURIComponent(name)}`;
+          else if (window.location.hash.startsWith("#/org/")) {
+            window.location.hash = "#/orgs";
+          }
+        } catch (_) {}
+      }, []);
+
+      // Selected CVE for PageCVEDetail. null = list.
+      // Hash sync : #/cve/CVE-YYYY-NNNNN
+      const [selectedCVE, setSelectedCVERaw] = useState(null);
+      const setSelectedCVE = useCallback((id) => {
+        setSelectedCVERaw(id || null);
+        try {
+          if (id) window.location.hash = `#/cve/${encodeURIComponent(id)}`;
+          else if (window.location.hash.startsWith("#/cve/")) {
+            window.location.hash = "#/cves";
+          }
+        } catch (_) {}
+      }, []);
+
+      // Read hash at boot — supports F5 / bookmarked links.
+      useEffect(() => {
+        const h = window.location.hash || "";
+        const mOrg = h.match(/^#\/org\/(.+)$/);
+        if (mOrg) {
+          setSelectedOrgRaw(decodeURIComponent(mOrg[1]));
+          setActive("orgs");
+          return;
+        }
+        const mCVE = h.match(/^#\/cve\/(.+)$/);
+        if (mCVE) {
+          setSelectedCVERaw(decodeURIComponent(mCVE[1]));
+          setActive("cves");
+        }
+      }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+      const onNav = (id) => {
+        setActive(id);
+        setSelectedFinding(null);
+        // Clicking nav items always lands on the list, not on the last-opened
+        // detail page (would feel sticky otherwise).
+        if (id === "orgs") setSelectedOrg(null);
+        if (id === "cves") setSelectedCVE(null);
+      };
+      const onSelectTarget = (t) => setTarget(t);
+
+      const onDelete = async () => {
+        if (!target) return;
+        if (!confirm(`Delete all scan data for ${target}? This cannot be undone.`)) return;
+        try {
+          await window.ArgusAPI.deleteDomain(target);
+          const list = await window.ArgusAPI.listDomains();
+          setTargets(list);
+          setTarget(list[0] || null);
+          if (!list.length) { setData(window.ArgusAPI.emptyShape(null)); setLoading(false); }
+        } catch (e) {
+          alert("Delete failed: " + e);
+        }
+      };
+
+      // Boot screen
+      if (loading && !data.findings.length && !data.subdomains.length) {
+        return (
+          <div id="boot">
+            <div className="spin"/>
+            <div>{error ? <span className="err">{error}</span> : (target ? `loading ${target}` : "discovering targets")}</div>
+          </div>
+        );
+      }
+
+      const renderPage = () => {
+        switch (active) {
+          case "dashboard":     return <PageDashboard data={data} onNavigate={onNav} onSelectFinding={setSelectedFinding}
+                                          onLaunchScan={() => setScanModalOpen(true)}
+                                          onRerun={handleRerun}
+                                          openRunId={openRunId}
+                                          onCloseRun={() => setOpenRunId(null)}
+                                          onFilterFindings={(sev) => { setFindingsSevIntent(sev); setActive("findings"); }}
+                                          me={me}/>;
+          case "findings":      return <PageFindings data={data} onSelectFinding={setSelectedFinding}
+                                          initialSevFilter={findingsSevIntent}
+                                          onConsumeIntent={() => setFindingsSevIntent(null)}/>;
+          case "live-hosts":    return <PageLiveHosts data={data}/>;
+          case "subdomains":    return <PageSubdomains data={data}/>;
+          case "source-viewer": return <PageSourceViewer data={data}/>;
+          case "technologies":  return <PageTechnologies data={data}/>;
+          case "screenshots":   return <PageScreenshots data={data}/>;
+          case "urls":          return <PageURLs data={data}/>;
+          case "js-analysis":   return <PageJSAnalysis data={data}/>;
+          case "attack-surface":return <PageAttackSurface data={data} currentOrg={currentOrg}/>;
+          case "cves":
+            return selectedCVE ? (
+              <PageCVEDetail
+                cveId={selectedCVE}
+                onBack={() => setSelectedCVE(null)}
+              />
+            ) : (
+              <PageCVEs
+                currentOrg={currentOrg}
+                onSelectCVE={setSelectedCVE}
+              />
+            );
+          case "active":        return <PageActive data={data}/>;
+          case "checks":        return <PageChecks data={data}/>;
+          // Legacy IDs : redirige vers Checks (back-compat URLs/bookmarks).
+          case "gf-patterns":   return <PageFindings data={data} onSelectFinding={setSelectedFinding}/>;
+          case "takeovers":
+          case "email-security":
+          case "api-specs":
+          case "posture":
+          case "hygiene":       return <PageChecks data={data}/>;
+          case "config":        return <PageConfig me={me}/>;
+          case "docs":          return <PageDocs/>;
+          case "users":         return <PageUsers me={me}/>;
+          case "orgs":
+            return selectedOrg ? (
+              <PageOrgDetail
+                name={selectedOrg}
+                me={me}
+                onBack={() => setSelectedOrg(null)}
+                onChanged={reloadOrgs}
+              />
+            ) : (
+              <PageOrgs me={me} onSelectOrg={setSelectedOrg}/>
+            );
+          case "audit":         return <PageAuditLog me={me}/>;
+          default: return null;
+        }
+      };
+
+      return (
+        <div className={`app ${sidebarOpen ? "sidebar-open" : "sidebar-closed"}`}>
+          {/* Floating brand mark — always visible when sidebar is closed.
+              Click toggles the drawer. */}
+          <button
+            className={`brand-fab ${sidebarOpen ? "hidden" : ""}`}
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open sidebar"
+            title="Open menu (Ctrl+B)"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+              <circle cx="12" cy="12" r="9"/>
+              <circle cx="12" cy="12" r="4.5"/>
+              <circle cx="12" cy="12" r="1.2" fill="currentColor"/>
+              <path d="M12 1v3M12 20v3M1 12h3M20 12h3"/>
+            </svg>
+          </button>
+          <Sidebar
+            active={active} onNav={onNav} data={data}
+            sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}
+            me={me}
+            orgs={orgs} currentOrg={currentOrg} onOrgChange={setCurrentOrg}
+          />
+          <div className="main-col">
+            <TopBar
+              active={active}
+              target={target}
+              targets={filteredTargets}
+              onSelectTarget={onSelectTarget}
+              onDelete={onDelete}
+              onReload={reload}
+              onLaunchScan={() => setScanModalOpen(true)}
+              sidebarOpen={sidebarOpen}
+              setSidebarOpen={setSidebarOpen}
+              me={me}
+              activeScans={activeScans}
+              onOpenRun={(id) => { setOpenRunId(id); setActive("dashboard"); }}
+              loading={loading}
+            />
+            <main className="content" key={`${active}:${data._v || 0}`}>
+            {/* Global pages (Étape 2.1) are always reachable — they manage
+                entities (orgs, users, audit, config, docs) that don't
+                depend on a loaded target. Everything else falls back to
+                the no-target view (which still surfaces in-flight scans). */}
+            {GLOBAL_PAGES.has(active) ? (
+              renderPage()
+            ) : !target ? (
+              <div className="page">
+                <div className="page-header">
+                  <div>
+                    <div className="page-eyebrow">OVERVIEW · ARGUS</div>
+                    <h1>{activeScans.length > 0 ? "Scan in progress" : "No target loaded"}</h1>
+                    <div className="lede">
+                      // {activeScans.length > 0
+                          ? `${activeScans.length} active scan${activeScans.length > 1 ? "s" : ""} — output appears here once committed`
+                          : "RUN A SCAN TO POPULATE ARGUS"}
+                    </div>
+                  </div>
+                  {me && roleMeets(me.role, "admin") && (
+                    <div className="page-header-actions">
+                      <button className="cmd-btn cmd-btn-primary" onClick={() => setScanModalOpen(true)}>
+                        <Icon name="play" size={12}/> Initiate Scan
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Live log of the run we're currently watching. */}
+                {openRunId && <ScanLogPanel runId={openRunId} onClose={() => setOpenRunId(null)}/>}
+
+                {/* Active scans list — clickable to view the live log. */}
+                {activeScans.length > 0 && (
+                  <div className="card">
+                    <div className="card-header">
+                      <div className="card-title">Active runs</div>
+                      <div className="card-subtitle">// CLICK A ROW TO ATTACH THE LIVE LOG</div>
+                    </div>
+                    <div className="table-wrap">
+                      <table className="data">
+                        <thead><tr>
+                          <th style={{width:140}}>Target</th>
+                          <th style={{width:100}}>Mode</th>
+                          <th style={{width:100}}>State</th>
+                          <th style={{width:90}}>Duration</th>
+                          <th>Run ID</th>
+                        </tr></thead>
+                        <tbody>
+                          {activeScans.map(r => (
+                            <tr key={r.id} style={{cursor:"pointer"}}
+                                onClick={() => setOpenRunId(r.id)}>
+                              <td>{r.target}</td>
+                              <td className="dim">{r.mode}</td>
+                              <td>
+                                <span style={{display:"inline-flex",alignItems:"center",gap:6}}>
+                                  <span style={{width:6,height:6,borderRadius:"50%",
+                                                background:"var(--solid)",
+                                                animation:"pulse2 1.4s infinite"}}/>
+                                  {r.state}
+                                </span>
+                              </td>
+                              <td className="mono num">{Math.floor(r.duration)}s</td>
+                              <td className="mono dim" style={{fontSize:10.5}}>{r.id}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Onboarding card — only when nothing else fills the page. */}
+                {activeScans.length === 0 && !openRunId && (
+                  <div className="card">
+                    <div className="empty" style={{padding:"60px 20px"}}>
+                      <div className="empty-icon"><Icon name="target" size={40}/></div>
+                      <div className="empty-title">NO DOMAIN SCANNED YET</div>
+                      <div className="empty-msg" style={{marginBottom:14}}>
+                        Click <strong>Initiate Scan</strong> above, or from a terminal:<br/>
+                        <code style={{display:"inline-block",marginTop:8}}>./run.sh -t example.com</code>
+                      </div>
+                      <div style={{fontSize:11,color:"var(--text-faint)"}}>
+                        See <a href="#" onClick={(e) => {e.preventDefault(); onNav("docs");}} style={{color:"var(--accent)"}}>Docs</a> for the pipeline reference,
+                        or <a href="#" onClick={(e) => {e.preventDefault(); onNav("config");}} style={{color:"var(--accent)"}}>Config</a> to tune modules.
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : renderPage()}
+            </main>
+          </div>
+          <FindingDrawer finding={selectedFinding} onClose={() => setSelectedFinding(null)}/>
+
+          <ScanModal
+            open={scanModalOpen}
+            onClose={() => setScanModalOpen(false)}
+            defaultTarget={target || ""}
+            currentOrg={currentOrg}
+            canManageOrgs={me && roleMeets(me.role, "admin")}
+            onLaunched={(r) => {
+              setOpenRunId(r.id);
+              setActive("dashboard");
+              // Anchor on the new target immediately so the dashboard
+              // shows "loading" instead of "no target" while results
+              // commit. The listDomains refresh below catches up shortly.
+              if (r.target && !target) setTarget(r.target);
+              window.ArgusAPI.listDomains().then(setTargets).catch(() => {});
+              // If a new apex was linked to an org during this scan
+              // launch, refresh the sidebar org dropdown counts.
+              reloadOrgs();
+            }}/>
+
+          <TweaksPanel title="Tweaks">
+            <TweakSection label="Chrome"/>
+            <TweakSlider label="Accent hue" min={0} max={360} step={1} value={tweaks.accentHue}
+              onChange={v => setTweak("accentHue", v)} unit="°"/>
+            <TweakRadio label="Density" value={tweaks.density}
+              options={["compact","normal","spacious"]}
+              onChange={v => setTweak("density", v)}/>
+            <TweakToggle label="Glass chrome" value={tweaks.glassChrome}
+              onChange={v => setTweak("glassChrome", v)}/>
+            <TweakSection label="Background"/>
+            <TweakToggle label="Radial glow" value={tweaks.showGradient}
+              onChange={v => setTweak("showGradient", v)}/>
+            <TweakToggle label="Grid overlay" value={tweaks.showGrid}
+              onChange={v => setTweak("showGrid", v)}/>
+            <TweakToggle label="Scanlines" value={tweaks.showScanlines}
+              onChange={v => setTweak("showScanlines", v)}/>
+            <TweakSection label="Hue presets"/>
+            {[
+              ["Tactical green", 142],
+              ["SOC teal", 159],
+              ["Recon blue", 215],
+              ["Brief blue", 245],
+              ["Violet", 285],
+              ["Amber alert", 50],
+              ["Crimson", 12],
+            ].map(([l,h]) => (
+              <TweakButton key={l} label={`${l} — ${h}°`}
+                secondary={tweaks.accentHue !== h}
+                onClick={() => setTweak("accentHue", h)}/>
+            ))}
+          </TweaksPanel>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  </script>
+</body>
+</html>

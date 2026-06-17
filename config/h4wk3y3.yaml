@@ -1,0 +1,386 @@
+# ============================================================
+#  Argus V2 — Configuration (épurée)
+#
+#  Ce fichier ne contient QUE l'indispensable :
+#    - toggles on/off de modules et d'outils
+#    - chemins externes (output, db, wordlists, templates)
+#    - timeouts critiques
+#    - listes utilisateur (résolveurs DNS, severities, tags)
+#    - caps de sécurité (max URLs, budgets)
+#
+#  Tout le reste (concurrences, batch sizes, retries, etc.) est
+#  géré par des défauts Python sensés dans les modules.
+#
+#  Sections ordonnées par stage d'exécution (cf. core/pipeline.py
+#  STAGES). m01 + m02 en pré-stage parallèle, puis m03, puis m04..m09
+#  en parallèle, puis m10 → m11 → m12||m13 → m14.
+# ============================================================
+
+# ──────────────────────────────────────────────────────────────
+#  GENERAL
+# ──────────────────────────────────────────────────────────────
+general:
+  output_dir: "./output"
+  # Postgres DSN — Argus est Postgres-only depuis le switch 2026-05.
+  # Override via env var ARGUS_DB_URL pour CI / staging.
+  # Driver psycopg = sync (utilisé par alembic + ArgusDB sync path).
+  # Pour async runtime: postgresql+asyncpg://argus:pw@host/argus_main.
+  db_url: "postgresql+psycopg://argus:argus_local_dev@127.0.0.1/argus_main"
+  log_level: "INFO"
+  log_file: "./argus.log"
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+# ──────────────────────────────────────────────────────────────
+#  API KEYS
+#  - chaos: PDCP_API_KEY env var (ou ici)
+#  - subfinder: provider keys lues depuis ~/.config/subfinder/provider-config.yaml
+# ──────────────────────────────────────────────────────────────
+api_keys:
+  chaos: ""
+
+# ──────────────────────────────────────────────────────────────
+#  M01 — OSINT (pré-stage, parallèle avec m02 — target.domain only)
+# ──────────────────────────────────────────────────────────────
+osint:
+  enabled: true
+  whois: true
+  email_auth: true             # SPF/DMARC/DKIM lookup
+  # DKIM selectors probed (no public registry, so we sample common ones).
+  dkim_selectors:
+    - default
+    - google
+    - k1
+    - mail
+    - selector1
+    - selector2
+    - s1
+  # DNS resolvers for OSINT TXT queries — public DNS avoids split-horizon
+  # views that hide DMARC.
+  dns_nameservers:
+    - 1.1.1.1
+    - 8.8.8.8
+    - 9.9.9.9
+  github_secrets: true         # ignored if no github_org or GITHUB_TOKEN
+  github_org: ""               # e.g. "loteriebenin" — set to scan an org with trufflehog
+  github_timeout_sec: 600
+  hibp: true                   # ignored if HIBP_API_KEY env var not set
+  # Override env vars here if you prefer config-based credentials :
+  github_token: ""
+  hibp_api_key: ""
+
+# ──────────────────────────────────────────────────────────────
+#  M02 — Subdomain Enumeration (pré-stage, parallèle avec m01)
+# ──────────────────────────────────────────────────────────────
+subdomain:
+  enabled: true
+  passive:
+    subfinder: true
+    assetfinder: true
+    findomain: true
+    crtsh: true           # 5 retries + cache disque 24h
+    certspotter: true     # 2nd CT-log source (sans clé jusqu'à ~100 req/h)
+    chaos: true           # nécessite PDCP_API_KEY
+  active:
+    # Off par défaut : shuffledns (brute-force 110k entries, ~5min) +
+    # alterx (permutations sur subs connus, ~3min) consomment ~8min sans
+    # ramener de nouveau résultat dans la majorité des cas (les sources
+    # passives + CT logs couvrent déjà bien). Activer explicitement quand
+    # on cible un domaine qu'on suspecte avoir des conventions de naming
+    # internes non indexées (dev-*, staging-*, internal-*, etc.).
+    enabled: false
+    shuffledns: true       # ignoré si enabled=false
+    alterx: true           # ignoré si enabled=false
+    wordlist: /usr/share/seclists/Discovery/DNS/subdomains-top1million-110000.txt
+    resolvers: ./data/resolvers/resolvers.txt
+  dnsx:
+    a: true
+    cname: true
+    mx: true
+    txt: true
+    ptr: false            # reverse DNS — désactivé, non utilisé downstream
+  # Résolveurs DNS publics utilisés par toutes les requêtes A/CNAME/MX/TXT.
+  # Vide = utilise la liste interne (8.8.8.8, 9.9.9.9, 8.8.4.4, 208.67.222.222).
+  dns_nameservers: []
+  # Deadline propre à la phase d'enrichissement DNS (A/CNAME/PTR), bien sous le
+  # budget module (900s). Au-delà → on garde la liste passive non résolue et on
+  # laisse M03 sonder en HTTP. Évite qu'un resolver lent/injoignable tue tout le
+  # module et fasse perdre TOUS les subs passifs (cascade m03→m14 skippés).
+  dns_enrich_budget_sec: 300
+  # Plafond de subs re-sondés par la 3e passe de retry DNS (concurrency=3,
+  # ~30s/sub). Si la passe bulk ne résout rien, la 3e passe est sautée
+  # (resolver injoignable → pur gaspillage de budget).
+  dns_retry_cap: 250
+
+# ──────────────────────────────────────────────────────────────
+#  M03 — HTTP Validator + Tech Detection (stage 1)
+# ──────────────────────────────────────────────────────────────
+http_validator:
+  enabled: true
+  timeout: 10
+  min_confidence: 0.6
+  detect_waf: true
+  extract_favicon_hash: true
+  # Ports probés par httpx-toolkit. Default minimal pour rester rapide.
+  # Élargir pour les bug bounties intensives :
+  # "80,443,8080,8443,8000,8888,9000,3000,5000,8081,8090,9090,7000,8001"
+  probe_ports: "80,443,8080,8443"
+  # Résolveurs DNS pour les probes HTTP — surchargent /etc/resolv.conf.
+  dns_nameservers:
+    - 8.8.8.8
+    - 9.9.9.9
+    - 149.112.112.112
+    - 8.8.4.4
+
+# ──────────────────────────────────────────────────────────────
+#  M04 — URL Collector (stage 2 parallel)
+# ──────────────────────────────────────────────────────────────
+url_collector:
+  enabled: true
+  gau: {enabled: true}
+  katana: {enabled: true}
+  gospider: {enabled: false}         # redondant avec katana
+  waybackurls: false                  # redondant avec gau
+  uro: true                           # smart URL dedup
+  max_urls_per_domain: 5000           # cap mémoire (URL_HARD_CAP=500k env var)
+  probe_live:
+    enabled: true                     # filtre URLs mortes (404/410) via httpx
+    timeout: 5
+
+# ──────────────────────────────────────────────────────────────
+#  M05 — Screenshots — Playwright (stage 2 parallel)
+# ──────────────────────────────────────────────────────────────
+screenshot:
+  enabled: true
+  timeout: 45                  # cible gov/edu lentes
+  max_urls: 500
+  width: 1280
+  height: 720
+  quality: 80
+  thumbnails: true
+
+# ──────────────────────────────────────────────────────────────
+#  M06 — Subdomain Takeover (stage 2 parallel)
+# ──────────────────────────────────────────────────────────────
+takeover:
+  enabled: true
+
+# ──────────────────────────────────────────────────────────────
+#  M07 — Ports & Service Discovery (stage 2 parallel)
+#  rustscan = primary (5-10× plus rapide que naabu) → fallback naabu
+#  → fallback TCP-connect. nmap -sV pour les services sur les ports
+#  ouverts. OPSEC: -T2 par défaut, -T1 sous --stealth.
+# ──────────────────────────────────────────────────────────────
+ports:
+  enabled: true
+  prefer: rustscan             # rustscan|naabu — rustscan absent → naabu, naabu absent → TCP-connect
+  max_ips: 50                  # cap on unique IPs scanned (skip private IPs)
+  rustscan:
+    range: "1-65535"           # full scan — c'est le point fort de rustscan
+    ulimit: 5000
+    batch: 4500                # 3× plus de paquets en vol (sous ulimit)
+    timeout_ms: 1000           # 1s suffit pour distinguer open/closed
+    batch_stealth: 1000        # sous --stealth (vs 500 avant)
+    timeout_ms_stealth: 3000   # sous --stealth
+  rustscan_timeout_sec: 600    # wall timeout — 10 min pour absorber 50 IPs en file
+  # Fallback naabu — ignoré si rustscan présent (prefer=rustscan).
+  top_ports: 1000              # naabu top-N TCP ports
+  rate: 1000                   # naabu packets/sec
+  naabu_timeout_sec: 300
+  # nmap -sV sur les ports ouverts (banner detection).
+  nmap_service_detect: true
+  nmap_port_budget: 300        # full scan trouvera + de ports rares (était 100)
+  nmap_concurrency: 4
+  nmap_timing: "-T2"           # OPSEC: -T2 par défaut, -T1 forcé sous --stealth. -T4/T5 interdit.
+  nmap_timeout_sec: 180
+  cdncheck: true               # classify IPs as CDN vs origin (origin IP leak detection)
+  emit_info_services: false    # set true to surface http/https/ssh as info findings
+
+# ──────────────────────────────────────────────────────────────
+#  M08 — TLS Audit (stage 2 parallel)
+#  testssl.sh est lent (~2 min/host) et bruyant : skip sous --stealth
+#  par défaut (override avec run_under_stealth: true).
+# ──────────────────────────────────────────────────────────────
+tls:
+  enabled: true
+  max_hosts: 10                # sample apex + shortest names
+  concurrency: 2
+  per_host_timeout_sec: 300
+  run_under_stealth: false     # testssl is loud — set true pour l'inclure sous --stealth
+
+# ──────────────────────────────────────────────────────────────
+#  M09 — Quick Checks (stage 2 parallel)
+#  5 atomic checks par live host. Aucune binaire externe requise.
+#  Evidence redactée : keys-only pour .env, sha256+claim-names pour JWT.
+# ──────────────────────────────────────────────────────────────
+quick_checks:
+  enabled: true
+  max_hosts: 100
+  concurrency: 20              # aiohttp connector pool size
+  per_check_concurrency: 8     # semaphore par check
+  total_timeout: 600
+  graphql: true                # POST introspection on /graphql + variants
+  git: true                    # /.git/HEAD + /.git/config
+  env: true                    # /.env, /.env.local, /.env.production, /.env.dev
+  jwt: true                    # scan in-memory headers/cookies for JWTs
+  cloud_bucket: true           # extract S3/GCS/Azure URLs — scope-filtered
+
+# ──────────────────────────────────────────────────────────────
+#  M10 — Body / Headers Fetcher (stage 3)
+#  Lit live_hosts (m03) + URLs intéressantes (m04). Feed m11/m12.
+# ──────────────────────────────────────────────────────────────
+fetcher:
+  enabled: true
+  timeout: 15
+  save_bodies: false           # true = persiste chaque HTML body sur disque
+  fetch_extra_urls: true       # fetch aussi les URLs intéressantes de m04
+  max_extra_urls: 800          # cap URLs m04 fetchées en plus des live_hosts
+  # Octets max lus par body. Default 2 MB pour capturer les SPAs avec gros
+  # bundles JS inline. Augmenter si vous greppez des bodies très volumineux
+  # (mais bodies_snippets.json grossit linéairement).
+  max_body_size: 2000000
+  # Cap (KB) sur ce qui finit dans body_snippet → bodies_snippets.json
+  # (lu par m11/m12 pour analyse). 0 = pas de cap (préserve l'analyse
+  # complète). Set à 64-256 si bodies_snippets.json devient trop gros.
+  snippet_max_kb: 0
+
+# ──────────────────────────────────────────────────────────────
+#  M11 — JS Analyzer (stage 4)
+# ──────────────────────────────────────────────────────────────
+js_analyzer:
+  enabled: true
+  timeout: 20
+  max_js_files: 500
+  jsluice: true                # outil externe optionnel
+  sourcemapper: true           # détection .map exposant les sources
+  min_confidence: 0.5
+  # ── Source-map recovery ────────────────────────────────────
+  # Quand une .js.map expose `sourcesContent`, reconstruire le code source
+  # first-party sur disque (output/<domaine>/sourcemaps/recovered/<host>/) et
+  # l'analyser en profondeur : secrets, endpoints internes, env vars, routes,
+  # logique d'access-control, commentaires sensibles. Vendor (node_modules /
+  # webpack runtime) ignoré. Findings secrets individuels + 1 finding récap
+  # d'intel par host (+ recovered_intel.json).
+  extract_sourcemaps: true
+  sourcemap_max_files: 1500        # plafond de fichiers reconstruits par scan
+  sourcemap_capture_budget: 24000000  # budget mémoire (octets) du sourcesContent
+  sourcemap_file_cap: 1000000      # taille max par fichier source reconstruit
+  # Mining de source maps historiques via Wayback Machine — d'anciennes .map
+  # exposent souvent du code (endpoints/secrets) retiré de la prod actuelle.
+  wayback_sourcemaps: true
+  wayback_max: 1500                # plafond d'URLs .js.map récupérées de Wayback
+  # Mots-clés ajoutés à la regex native (en plus du jeu intégré)
+  keywords:
+    - firebase
+    - amazon
+    - aws_access
+    - api_key
+    - apikey
+    - secret
+    - token
+    - password
+    - private
+
+# ──────────────────────────────────────────────────────────────
+#  M12 — Pattern Analysis (stage 5 parallel)
+# ──────────────────────────────────────────────────────────────
+pattern_analysis:
+  gf_enabled: true
+  analyze_urls: true
+  analyze_bodies: true
+  analyze_js: true
+  reflection_check: true       # canary echo test → feeds m14
+  parameter_discovery:
+    enabled: true              # arjun
+
+# ──────────────────────────────────────────────────────────────
+#  M13 — Nuclei (stage 5 parallel)
+#  Profil surface-only : misconfigurations + exposures uniquement.
+#  CVE / default-login / intrusive EXCLUS via exclude_tags. Ce stage
+#  n'est PAS un scanner d'exploits — les findings sérieux passent par
+#  m12 (patterns) et m14 (active validation ciblée).
+# ──────────────────────────────────────────────────────────────
+nuclei:
+  enabled: true
+  severity:
+    - medium
+    - high
+    - critical
+  targeted_scanning: true      # tags = techs détectées (WP/Laravel/...) ∩ exclude_tags
+  high_impact_info: false      # désactivé : redondant avec m09 (.env/.git) et m11 (sourcemap)
+  retries: 1                   # 1 suffit ; 2 retries ralentit beaucoup sur hosts lents
+  max_host_error: 30           # skip host pourri 6× plus vite (était 200)
+  # OPSEC : rate_limit est PAR HOST. concurrency = nb de hosts en parallèle
+  # côté Argus. Une cible voit toujours ≤ rate_limit req/s même si on bump
+  # concurrency. m13 réduit auto à 5 si WAF détecté ou --stealth.
+  rate_limit: 10
+  concurrency: 50              # 25 → 50 (parallèle Argus-side, cible voit toujours 10 req/s)
+  timeout: 5                   # 10 → 5 (skip plus vite les hosts lents)
+  module_timeout_sec: 1800     # 30 min wall timeout (kill subprocess after)
+  always_run:
+    # Surface-only : ~2300 templates (vs ~4500 avant). Pas de CVE.
+    # Pour ajouter de la couverture CVE, populate custom_templates_dir/
+    # ou ajouter ici (ex: http/cves/2024/) en sachant le coût en temps.
+    - http/misconfiguration/
+    - http/exposures/
+  exclude_tags:
+    # Garde-fou : même si targeted_scanning matche un tag tech (wordpress,
+    # apache, etc.), on EXCLUT toujours cve/default-login/intrusive.
+    - dos
+    - fuzz
+    - intrusive
+    - cve
+    - default-login
+  custom_templates_dir: "./data/nuclei-templates"
+  # resolvers: ./data/resolvers/resolvers.txt   # par défaut hérite de subdomain.resolvers
+
+# ──────────────────────────────────────────────────────────────
+#  M14 — Active Validation (stage 6)
+#  Confirme les vulns candidates de m12/m13 par tests actifs ciblés.
+#  Scope-filtered à chaque étape (XSS/SQLi candidates re-filtrés au load).
+# ──────────────────────────────────────────────────────────────
+active_validation:
+  enabled: true
+  total_budget_sec: 1800       # 30 min wall-clock budget
+  file_exposure: true          # brute paths sensibles (.git/.env/etc) — GET only, fingerprint strict requis, soft-404 hosts skipped, evidence redactée pour secret-paths
+  open_redirect: true          # GET-based, sûr
+  open_redirect_cap: 50
+  # Probes backend sur les API bases récupérées des source maps (m11) :
+  # signatures unauth Directus/Strapi/Hasura/Supabase/PocketBase/GraphQL.
+  # GET-only, hit = 200 + signature body. Ferme la boucle recon→test actif.
+  backend_probe: true
+  backend_probe_max_origins: 20
+  backend_probe_concurrency: 10
+  # OPSEC (défaut 2026-06) : dalfox (XSS) et sqlmap (SQLi) sont bruyants et
+  # potentiellement intrusifs/destructifs (sqlmap teste des injections actives).
+  # Sur un scope CSIRT/gov on ne les tire pas automatiquement → opt-in explicite.
+  # Active-les par cible quand tu veux la validation offensive complète :
+  #   --modules m14  (avec ces toggles à true), ou édite ce fichier.
+  xss_dalfox: false            # opt-in (était true) — XSS dalfox
+  xss_cap: 40
+  sqli_sqlmap: false           # opt-in (était true) — SQLi sqlmap (le plus intrusif)
+  sqli_cap: 15
+
+# ──────────────────────────────────────────────────────────────
+#  Notifications
+# ──────────────────────────────────────────────────────────────
+notifications:
+  discord_webhook: ""
+  slack_webhook: ""
+  notify_on:
+    - critical
+    - high
+    - new_subdomain
+    - takeover
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8000
+
+# ──────────────────────────────────────────────────────────────
+#  Scheduler — rafraîchissement périodique des feeds CVE (core/scheduler.py)
+#  Tourne dans la boucle asyncio du dashboard. Off par défaut.
+# ──────────────────────────────────────────────────────────────
+scheduler:
+  enabled: false              # master switch (true = active le scheduler)
+  feed_refresh_hours: 24      # intervalle entre 2 cycles (pull m15 + correlate m17)
+  first_run_delay_sec: 30     # délai après boot avant le 1er cycle

@@ -1,0 +1,147 @@
+# ============================================================
+#  Argus V2 — docker-compose
+#
+#  Lives in <repo>/deploy/. Build context = the repo root (..) so the
+#  Docker image bakes the actual source — single source of truth, no
+#  duplication. Tar the whole repo + this directory to redeploy elsewhere.
+#
+#  Topology (Argus est Postgres-only depuis 2026-05):
+#    postgres  → DB persistante (volume argus-postgres-data)
+#    argus     → app principale, dépend de postgres healthy
+#    scan      → service éphémère pour scans one-shot
+#
+#  Usage (from this directory):
+#    docker compose build
+#    docker compose up -d                            # postgres + dashboard
+#    docker compose run --rm scan scan example.com --full
+# ============================================================
+
+# Force the Compose project name regardless of the host directory we're invoked
+# from. Without this, Compose derives the project name from the directory
+# (e.g. "deploy") and creates fresh volumes prefixed `deploy_…`, leaving any
+# previously-created `argus_…` volumes orphaned.
+name: argus
+
+services:
+  # ── Postgres backend (Argus runtime canonical store) ────────
+  postgres:
+    image: postgres:18-alpine
+    container_name: argus-postgres
+    hostname: postgres
+
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-argus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (no default — would be a public password)}
+      POSTGRES_DB:       ${POSTGRES_DB:-argus_main}
+      # PG18 sometimes ships a collation older than the host glibc.
+      # Set ICU as default to sidestep the version-mismatch warning.
+      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=en-US"
+
+    volumes:
+      - argus-postgres-data:/var/lib/postgresql/data
+
+    # Healthcheck so the argus service can `depends_on: postgres: condition: service_healthy`
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-argus} -d ${POSTGRES_DB:-argus_main}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+    restart: unless-stopped
+
+    # Postgres is internal to the compose network — uncomment to expose
+    # it on the host (debugging only — never expose to the internet).
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+
+  # ── Argus app ───────────────────────────────────────────────
+  argus:
+    build:
+      context: ..                       # repo root
+      dockerfile: deploy/Dockerfile
+      # BuildKit required (default on Docker 23+)
+    image: argus:latest
+    container_name: argus
+    hostname: argus
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    # 16 GB host → laisse 2 GB pour l'OS, garantit un kill propre vs OOM silencieux
+    mem_limit: 14g
+    memswap_limit: 14g
+    shm_size: 2g            # ⚠ critique pour Playwright/Chromium dans m05
+
+    # DNS public → évite l'embedded resolver Docker (127.0.0.11) qui throttle m02
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+      - 9.9.9.9
+
+    env_file:
+      - .env                # PDCP_API_KEY, GH_TOKEN, etc. (voir .env.example)
+
+    environment:
+      TZ: ${TZ:-UTC}
+      # DB DSN pointing at the postgres service. Lu en priorité par
+      # core/db_engine.resolve_db_url + alembic/env.py, donc l'app et les
+      # migrations utilisent la même connexion sans toucher au YAML.
+      ARGUS_DB_URL: "postgresql+psycopg://${POSTGRES_USER:-argus}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (no default — would be a public password)}@postgres:5432/${POSTGRES_DB:-argus_main}"
+
+    ports:
+      - "${ARGUS_DASHBOARD_PORT:-8000}:8000"
+
+    volumes:
+      # Persistance des résultats — output JSON, screenshots, bodies
+      - ./volumes/output:/home/kali/argus/output
+      # data/ : .session_secret, .first_admin, cache crt.sh, resolvers, wordlists.
+      # La DB Postgres tourne dans le service `postgres` (volume argus-postgres-data).
+      - ./volumes/data:/home/kali/argus/data
+      # Config éditable hors-container (le dashboard /api/config écrit dedans)
+      - ./volumes/config/argus.yaml:/home/kali/argus/config/argus.yaml
+      # Scope-as-code (Étape 2.2) — un YAML par org, hot-éditable
+      - ./volumes/scopes:/home/kali/argus/scopes
+      # Wildcards = liste blanche des domaines scannables (sécurité quand
+      # dashboard sur 0.0.0.0). Edit puis `docker compose restart argus`.
+      - ./volumes/wildcards:/home/kali/argus/wildcards
+      # API keys subfinder (fournir provider-config.yaml ici)
+      - ./volumes/subfinder:/home/kali/.config/subfinder
+      # Nuclei templates — refresh out-of-band via `docker compose run argus update-templates`
+      - argus-nuclei-templates:/home/kali/.config/nuclei
+      # Playwright Chromium cache — évite re-download à chaque rebuild d'image
+      - argus-playwright:/home/kali/.cache/ms-playwright
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    restart: unless-stopped
+
+    # Pour les scans one-shot, override avec `docker compose run --rm scan ...`
+    command: ["dashboard"]
+
+  # Service ephemère pour lancer un scan (n'a pas le port mapping ni restart)
+  scan:
+    extends:
+      service: argus
+    container_name: argus-scan
+    profiles: ["scan"]       # ne démarre PAS avec `compose up`
+    restart: "no"
+    ports: []
+    # Pas de healthcheck — c'est un job batch, pas un service
+    healthcheck:
+      disable: true
+    command: ["scan", "example.com", "--full"]
+
+volumes:
+  argus-nuclei-templates:
+    name: argus-nuclei-templates
+  argus-playwright:
+    name: argus-playwright
+  argus-postgres-data:
+    name: argus-postgres-data

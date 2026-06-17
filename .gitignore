@@ -1,0 +1,58 @@
+# Output & data
+output/
+data/resolvers/
+data/wordlists/
+*.log
+
+# Auth secrets — NEVER commit
+data/.session_secret
+data/.first_admin
+data/.first_admin.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+argus-env/
+.pytest_cache/
+
+# Node
+node_modules/
+dashboard/frontend/dist/
+
+# Temp files
+*.tmp
+*.bak
+.DS_Store
+
+# Screenshots dev/scratch (root-level)
+.shot-*.png
+.screenshot-*.png
+
+# Backups (local)
+*.tar.gz
+
+# Wildcards file — contains authorised scan targets (potentially private)
+# Comment out the next line if you want to commit it for your team.
+wildcards
+
+# Scope-as-code files (Étape 2.2) — per-org scope yaml; private by default.
+# `scopes/example.com.yaml` is the committed template; anything else stays local.
+scopes/*.yaml
+scopes/*.yml
+!scopes/example.com.yaml
+
+# Secrets — never commit
+config/h4wk3y3.env
+.env
+.env.local
+.env.production
+.env.dev
+
+# Local agent config (target allowlist) — never publish
+.claude/
+
+# CI workflow held back — PAT lacks 'workflow' scope; add via GitHub UI or scoped token
+.github/workflows/

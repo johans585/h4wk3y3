@@ -1,0 +1,274 @@
+# ============================================================
+#  Argus V2 - Custom Regex Patterns for Module 7
+#  Format: name, regex, severity, confidence, tags
+# ============================================================
+
+patterns:
+  # ── AWS ────────────────────────────────────────────────────
+  - name: aws_access_key
+    regex: '(?i)(AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}'
+    severity: critical
+    confidence: 0.95
+    tags: [aws, credentials]
+
+  - name: aws_secret_key
+    regex: '(?i)aws.{0,20}[''"][0-9a-zA-Z/+]{40}[''"]'
+    severity: critical
+    confidence: 0.85
+    tags: [aws, credentials]
+
+  - name: aws_s3_bucket_url
+    regex: 's3[.-][a-z0-9-]+\.amazonaws\.com'
+    severity: medium
+    confidence: 0.9
+    tags: [aws, s3]
+
+  # ── Google ─────────────────────────────────────────────────
+  - name: google_api_key
+    regex: 'AIza[0-9A-Za-z_\-]{35}'
+    severity: high
+    confidence: 0.95
+    tags: [google, api_key]
+
+  - name: google_oauth_token
+    regex: 'ya29\.[0-9A-Za-z_\-]+'
+    severity: high
+    confidence: 0.95
+    tags: [google, oauth]
+
+  - name: google_cloud_service_account
+    regex: '"type":\s*"service_account"'
+    severity: critical
+    confidence: 0.99
+    tags: [google, credentials]
+
+  # ── Firebase ───────────────────────────────────────────────
+  - name: firebase_url
+    regex: '[a-zA-Z0-9_-]+\.firebaseio\.com'
+    severity: medium
+    confidence: 0.9
+    tags: [firebase, endpoint]
+
+  - name: firebase_api_key
+    regex: '(?i)firebase[_\-.]?api[_\-.]?key[''"\s:=]+[A-Za-z0-9_\-]+'
+    severity: high
+    confidence: 0.8
+    tags: [firebase, api_key]
+
+  # ── Generic API Keys & Tokens ──────────────────────────────
+  - name: generic_api_key
+    regex: '(?i)(api[_\-]?key|api[_\-]?secret|app[_\-]?key)[''"\s:=]+[''"][A-Za-z0-9_\-]{16,64}[''"]'
+    severity: high
+    confidence: 0.7
+    tags: [generic, api_key]
+
+  - name: jwt_token
+    regex: 'eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+'
+    severity: medium
+    confidence: 0.95
+    tags: [jwt, token]
+
+  - name: bearer_token
+    regex: '(?i)bearer\s+[A-Za-z0-9_\-\.]{20,}'
+    severity: medium
+    confidence: 0.8
+    tags: [bearer, token]
+
+  - name: basic_auth_url
+    regex: 'https?://[A-Za-z0-9_\-]+:[A-Za-z0-9_\-]+@'
+    severity: high
+    confidence: 0.95
+    tags: [credentials, basic_auth]
+
+  # ── Database / Connection Strings ──────────────────────────
+  - name: mongodb_uri
+    regex: 'mongodb(\+srv)?://[^"''<>\s]+'
+    severity: critical
+    confidence: 0.9
+    tags: [database, mongodb]
+
+  - name: postgresql_uri
+    regex: 'postgres(ql)?://[^"''<>\s]+'
+    severity: critical
+    confidence: 0.9
+    tags: [database, postgresql]
+
+  - name: mysql_uri
+    regex: 'mysql://[^"''<>\s]+'
+    severity: critical
+    confidence: 0.9
+    tags: [database, mysql]
+
+  # ── Sensitive Endpoints ────────────────────────────────────
+  - name: admin_panel
+    regex: '(?i)(^|/)admin(/|$|\?|\.)'
+    severity: medium
+    confidence: 0.7
+    tags: [endpoint, admin]
+
+  - name: api_endpoint
+    regex: '(?i)/api/v[0-9]/'
+    severity: info
+    confidence: 0.9
+    tags: [endpoint, api]
+
+  - name: graphql_endpoint
+    regex: '(?i)/(graphql|graph|gql)(/|\?|$)'
+    severity: medium
+    confidence: 0.85
+    tags: [endpoint, graphql]
+
+  - name: swagger_ui
+    regex: '(?i)/(swagger|swagger-ui|api-docs|openapi)(/|\.json|\.yaml|$)'
+    severity: medium
+    confidence: 0.9
+    tags: [endpoint, docs, api]
+
+  - name: debug_endpoint
+    regex: '(?i)/(debug|trace|console|phpinfo|test|dev)(/|\?|$)'
+    severity: medium
+    confidence: 0.7
+    tags: [endpoint, debug]
+
+  - name: backup_file
+    regex: '(?i)\.(bak|backup|old|orig|copy|tmp|save|~)(\?|$)'
+    severity: high
+    confidence: 0.85
+    tags: [file, backup]
+
+  # Tightened: only flag config-like names, not generic .xml (RSS/atom/sitemap).
+  # Excludes feed/atom/rss/sitemap/index.xml and oembed/wp-json paths.
+  - name: config_file
+    regex: '(?i)/(web\.config|application\.ya?ml|application\.properties|config\.ya?ml|config\.json|settings\.ya?ml|settings\.json|appsettings\.json|database\.ya?ml|secrets\.ya?ml|credentials\.ya?ml)(\?|$)|\.(env|ini|cfg|conf|properties)(\?|$)'
+    severity: high
+    confidence: 0.85
+    tags: [file, config]
+
+  - name: git_exposed
+    regex: '(?i)/\.git(/|/HEAD|/config)'
+    severity: critical
+    confidence: 0.95
+    tags: [git, exposure]
+
+  - name: env_file
+    regex: '(?i)/\.env(\.[a-z]+)?(\?|$)'
+    severity: critical
+    confidence: 0.95
+    tags: [file, credentials, env]
+
+  # ── SSRF / Open Redirect Candidates ───────────────────────
+  - name: redirect_param
+    regex: '(?i)[?&](redirect|return|next|url|dest|destination|goto|to|callback|redir|ref)='
+    severity: medium
+    confidence: 0.7
+    tags: [ssrf, redirect]
+
+  - name: url_param
+    regex: '(?i)[?&](url|uri|link|src|source|feed|host|target|request)='
+    severity: medium
+    confidence: 0.65
+    tags: [ssrf]
+
+  # ── Injection Candidates ───────────────────────────────────
+  - name: sql_error_pattern
+    regex: '(?i)(sql\s*error|mysql_|pg_query|ora-[0-9]+|sqlite_|syntax\s+error.*\s+near)'
+    severity: high
+    confidence: 0.85
+    tags: [sqli, error]
+
+  - name: path_traversal_param
+    regex: '(?i)[?&](file|path|dir|folder|include|require|page|doc|document|template)='
+    severity: medium
+    confidence: 0.65
+    tags: [lfi, path_traversal]
+
+  # ── Private Keys ───────────────────────────────────────────
+  - name: private_key_pem
+    regex: '-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'
+    severity: critical
+    confidence: 0.99
+    tags: [key, credentials]
+
+  - name: ssh_private_key
+    regex: '-----BEGIN OPENSSH PRIVATE KEY-----'
+    severity: critical
+    confidence: 0.99
+    tags: [ssh, key, credentials]
+
+  # ── Webhooks (URL leak = unauthenticated send) ──────────────
+  - name: slack_webhook
+    regex: 'https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[a-zA-Z0-9]{20,}'
+    severity: high
+    confidence: 0.99
+    tags: [slack, webhook]
+
+  - name: discord_webhook
+    regex: 'https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w-]{40,}'
+    severity: high
+    confidence: 0.99
+    tags: [discord, webhook]
+
+  # ── Modern OAuth/PAT tokens ─────────────────────────────────
+  - name: github_token
+    regex: '\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}'
+    severity: critical
+    confidence: 0.99
+    tags: [github, token, credentials]
+
+  - name: gitlab_token
+    regex: '\bglpat-[A-Za-z0-9_-]{20,}'
+    severity: critical
+    confidence: 0.99
+    tags: [gitlab, token, credentials]
+
+  - name: slack_token
+    regex: '\bxox[baprs]-[A-Za-z0-9-]{10,}'
+    severity: critical
+    confidence: 0.95
+    tags: [slack, token, credentials]
+
+  # ── Cloud config strings ────────────────────────────────────
+  - name: azure_storage_key
+    regex: 'DefaultEndpointsProtocol=https;AccountName=[a-z0-9]+;AccountKey=[A-Za-z0-9+/=]{40,}'
+    severity: critical
+    confidence: 0.99
+    tags: [azure, storage, credentials]
+
+  # ── Stack traces / debug pages ──────────────────────────────
+  - name: python_traceback
+    regex: 'Traceback \(most recent call last\):'
+    severity: medium
+    confidence: 0.9
+    tags: [debug, stacktrace, python]
+
+  - name: php_fatal_error
+    regex: '(?i)(?:Fatal error|Parse error|Uncaught Exception|Stack trace):'
+    severity: medium
+    confidence: 0.9
+    tags: [debug, stacktrace, php]
+
+  - name: whoops_handler
+    regex: 'Whoops\\Handler|<title>Whoops!.{0,200}error</title>'
+    severity: high
+    confidence: 0.95
+    tags: [debug, stacktrace, php]
+
+  # ── Disclosure ──────────────────────────────────────────────
+  - name: directory_listing
+    regex: '<title>\s*Index of\s+/'
+    severity: medium
+    confidence: 0.9
+    tags: [disclosure, directory_listing]
+
+  - name: phpinfo_page
+    regex: '<title>phpinfo\(\)</title>|<h1[^>]*>PHP Version'
+    severity: high
+    confidence: 0.99
+    tags: [disclosure, phpinfo]
+
+  # ── Network leakage ─────────────────────────────────────────
+  - name: internal_ip
+    regex: '\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b'
+    severity: low
+    confidence: 0.85
+    tags: [disclosure, ip, internal]

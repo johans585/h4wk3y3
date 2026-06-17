@@ -1,0 +1,55 @@
+# Build context exclusions — keeps the image lean.
+# Lives at the repo root because the Docker build context is the repo root
+# (deploy/ contains the Dockerfile but the context is `..`).
+
+# Local Python venv — recreated fresh inside the image
+argus-env/
+.venv/
+venv/
+
+# Generated artefacts (rebuild on each scan; not source-of-truth)
+# (Argus est Postgres-only depuis 2026-05 — pas de DB locale dans data/)
+output/
+data/.cache/
+data/resolvers/resolvers.txt
+data/.first_admin
+data/.first_admin.*
+data/.session_secret
+*.log
+
+# Secrets / env files at the repo root — NEVER bake into the image.
+.env
+.env.*
+
+# Caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+.shot-*.png
+.screenshot-*.png
+.claude/
+
+# Git (not needed in image)
+.git/
+.gitignore
+
+# Frontend build artefacts (if any)
+dashboard/frontend/node_modules/
+dashboard/frontend/dist/
+
+# Misc
+ferox-*.state
+
+# Deploy-side runtime: don't bake the host-side volumes/ into the image,
+# nor the Dockerfile/.env which are meta to the deploy.
+deploy/volumes/
+deploy/.env

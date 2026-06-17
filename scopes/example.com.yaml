@@ -1,0 +1,20 @@
+# scopes/example.yaml — template d'un scope-as-code Argus
+# Renomme ce fichier en `<apex>.yaml` (ex: shopify.com.yaml) pour qu'il
+# soit auto-découvert par le pipeline.
+organisation: example-program
+apex: example.com
+
+scope:
+  in:
+    - "*.example.com"
+    - "*.example-cdn.com"
+  out:
+    - "*.example-internal.com"
+    - "shopify-checkout-uat.*"
+  restrictions:
+    - host: "checkout.example.com"
+      max_rps: 5
+      note: "payment flow — keep traffic low"
+    - path: "/api/payments/*"
+      disabled: true
+      note: "PCI scope — programme-side carve-out"

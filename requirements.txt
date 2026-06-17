@@ -1,0 +1,33 @@
+# ── Core ─────────────────────────────────────────────────────
+aiohttp>=3.9.0
+pyyaml>=6.0
+dnspython>=2.4.0          # core/dns_resolver: dns.asyncresolver / dns.resolver
+# ── Database (Postgres-only depuis 2026-05) ──────────────────
+sqlalchemy>=2.0,<3.0      # ORM + Core; engine + queries
+alembic>=1.13             # schema migrations
+psycopg[binary]>=3.1      # sync Postgres driver (runtime + alembic)
+asyncpg>=0.29             # async Postgres driver (future async paths)
+# ── Dashboard ────────────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9   # FastAPI form-data parsing (auth login form)
+ruamel.yaml>=0.18.0       # dashboard /api/config YAML round-trip (preserves comments/quoting on PUT)
+# ── Auth ─────────────────────────────────────────────────────
+bcrypt>=4.1.0             # password hashing for users table
+itsdangerous>=2.2.0       # signed session cookies (TimestampSigner)
+# ── Screenshots ──────────────────────────────────────────────
+playwright>=1.42.0
+Pillow>=10.0.0
+# ── Pattern analysis ─────────────────────────────────────────
+# (stdlib re + yaml, no extra deps)
+# ── Optional: aiofiles for async file I/O ────────────────────
+aiofiles>=23.0.0
+# ── Recon tool CLIs (pip-installable, invoked as subprocess) ─────────
+# Declared here (previously only installed ad-hoc in deploy/Dockerfile) so a
+# plain `pip install -r requirements.txt` yields a complete environment.
+arjun>=2.2.1             # m12: hidden HTTP parameter discovery
+uro>=1.0.0               # URL list dedup/normalisation
+psutil>=5.9.0            # process/memory introspection (watchdog)
+
+# NOTE: versions are floored (>=) for now. A pinned lock-file
+# (pip-compile / uv lock) is recommended for reproducible CI/image builds.

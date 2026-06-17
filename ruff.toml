@@ -1,0 +1,28 @@
+# Ruff configuration — Argus.
+#
+# Baseline established 2026-05 so CI can enforce `ruff check` (no more
+# `|| true`). We keep the correctness-oriented rules (pyflakes `F*`: unused
+# imports/vars, undefined names, etc.) strict, and relax three purely
+# stylistic checks that the codebase uses deliberately and consistently:
+#
+#   E701/E702  one-statement-per-line (`if x: return []`, `a; b`) — used on
+#              purpose for terse guard clauses throughout the modules.
+#   E741       ambiguous variable name `l` — used pervasively as the loop var
+#              in `for l in lines` comprehensions. Cosmetic only.
+#
+# E402 (import not at top) is legitimate in the few entrypoints that must
+# mutate sys.path / load dotenv before importing the package — ignored
+# per-file rather than globally so it stays enforced everywhere else.
+
+target-version = "py311"
+
+[lint]
+# Default ruff selection is E4/E7/E9 + F. Make it explicit, then drop the
+# cosmetic rules above.
+select = ["E4", "E7", "E9", "F", "W"]
+ignore = ["E701", "E702", "E741"]
+
+[lint.per-file-ignores]
+"argus.py"                        = ["E402"]
+"scripts/reseed_pg_from_output.py" = ["E402"]
+"tests/*"                         = ["E402"]

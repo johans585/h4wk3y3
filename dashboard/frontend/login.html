@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>h4wk3y3 — Sign in</title>
+  <link rel="icon" type="image/svg+xml" href="/ui/favicon.svg"/>
+  <script>
+    try {
+      var __t = localStorage.getItem("argus.theme") || "dark";
+      document.documentElement.setAttribute("data-theme", __t);
+    } catch (_) {}
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg: #0b0e14;
+      --panel: #11151c;
+      --border: rgba(255,255,255,0.08);
+      --text: #e6eaf3;
+      --text-dim: #7a8597;
+      --accent: #137C8B;
+      --error: #ff5e62;
+    }
+    html[data-theme="light"] {
+      --bg: #f3f5f7;
+      --panel: #ffffff;
+      --border: rgba(52,77,89,0.12);
+      --text: #0e1a20;
+      --text-dim: #5e7884;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Outfit', sans-serif;
+      min-height: 100vh;
+    }
+    body {
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(ellipse at top, rgba(91,231,169,0.08), transparent 60%), var(--bg);
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 36px 32px;
+      width: 100%; max-width: 380px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.4);
+    }
+    .brand {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--accent);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      margin: 0 0 28px;
+    }
+    label {
+      display: block;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      margin-top: 14px;
+    }
+    input[type=text], input[type=password] {
+      width: 100%;
+      padding: 11px 13px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus {
+      border-color: var(--accent);
+    }
+    button {
+      margin-top: 24px;
+      width: 100%;
+      padding: 12px;
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      border-radius: 6px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.9; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .err {
+      margin-top: 16px;
+      padding: 10px 12px;
+      background: rgba(255,94,98,0.1);
+      border: 1px solid rgba(255,94,98,0.4);
+      border-radius: 6px;
+      color: var(--error);
+      font-size: 13px;
+      display: none;
+    }
+    .err.show { display: block; }
+    .footnote {
+      margin-top: 22px;
+      font-size: 11px;
+      color: var(--text-dim);
+      text-align: center;
+      font-family: 'JetBrains Mono', monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">// h4wk3y3</div>
+    <h1>Sign in</h1>
+    <form id="loginForm" autocomplete="off">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" required autofocus/>
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" required/>
+      <button type="submit" id="submitBtn">Sign in</button>
+      <div class="err" id="err"></div>
+    </form>
+    <div class="footnote">Reconnaissance Framework</div>
+  </div>
+
+  <script>
+    const form = document.getElementById('loginForm');
+    const btn = document.getElementById('submitBtn');
+    const err = document.getElementById('err');
+
+    function showError(msg) {
+      err.textContent = msg;
+      err.classList.add('show');
+    }
+    function clearError() {
+      err.classList.remove('show');
+      err.textContent = '';
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearError();
+      btn.disabled = true;
+      btn.textContent = 'Signing in...';
+      try {
+        const fd = new FormData(form);
+        const r = await fetch('/api/auth/login', { method: 'POST', body: fd });
+        if (r.status === 200) {
+          window.location.href = '/ui/';
+          return;
+        }
+        if (r.status === 429) {
+          showError('Too many attempts. Try again in 15 minutes.');
+        } else if (r.status === 401) {
+          showError('Invalid username or password.');
+        } else {
+          showError(`Login failed (${r.status})`);
+        }
+      } catch (e) {
+        showError('Network error: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sign in';
+      }
+    });
+
+    // Note: we deliberately do NOT probe /api/auth/me here to auto-bounce an
+    // already-logged-in user. That probe returns 401 for the (common) anonymous
+    // case, which the browser logs as a red "Failed to load resource" console
+    // error on every visit to the login page. The session cookie is HttpOnly so
+    // JS can't pre-check it; the reverse bounce (dashboard → login on 401) in
+    // /ui/ already covers the meaningful redirect.
+  </script>
+</body>
+</html>
