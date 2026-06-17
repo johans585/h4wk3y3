@@ -119,7 +119,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl wget git unzip jq tzdata \
         python3 python3-pip python3-venv python3-dev \
         build-essential libxml2-dev libxslt1-dev libffi-dev libssl-dev \
-        nmap sqlmap ffuf rustscan wafw00f \
+        nmap sqlmap ffuf wafw00f \
         whois testssl.sh dnsutils libpcap0.8 \
         seclists \
         libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
@@ -128,6 +128,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libatspi2.0-0 libwayland-client0 fonts-liberation fonts-noto-color-emoji \
         nodejs npm \
     && rm -rf /var/lib/apt/lists/*
+
+# ── 1b. rustscan (not in kali apt) — best-effort .deb from GitHub ──
+# m07 prefers rustscan for fast full-range SYN scans but falls back to
+# naabo/TCP-connect if it's missing, so a release-URL change never breaks
+# the build.
+ARG RUSTSCAN_VER=2.4.1
+RUN set -eu; \
+    curl -fsSL -o /tmp/rustscan.deb \
+      "https://github.com/bee-san/RustScan/releases/download/${RUSTSCAN_VER}/rustscan_${RUSTSCAN_VER}_amd64.deb" \
+    && dpkg -i /tmp/rustscan.deb && rm -f /tmp/rustscan.deb \
+    && echo "[ok] rustscan ${RUSTSCAN_VER} installed" \
+    || echo "[warn] rustscan install failed — m07 falls back to naabu/TCP-connect"
 
 # ── 2. Non-root user (the code hardcodes /home/kali/... tool paths) ──
 RUN useradd -m -u 1000 -s /bin/bash kali \
