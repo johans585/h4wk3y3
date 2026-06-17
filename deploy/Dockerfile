@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1.7
 # ============================================================
-#  Argus V2 — Container image
-#  Base: kalilinux/kali-rolling (cohérent avec l'env dev)
-#  Multi-stage: Go-builder isolé pour ne pas baker le toolchain Go (>500 MB)
-#  dans l'image finale.
+#  h4wk3y3 — container image (self-contained: all recon tools baked in)
+#  Base: kalilinux/kali-rolling. Multi-stage: Go toolchain isolated in
+#  stage 1 so the ~600 MB Go SDK never lands in the runtime image.
+#  Goal: `docker build` reproduces the FULL environment on any host —
+#  zero dependency on tools pre-installed on the machine.
 # ============================================================
 
 # ─────────────────────────────────────────────────────────────
@@ -20,15 +21,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/usr/local/go/bin:/go/bin:$PATH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git golang-go build-essential unzip \
-        libpcap-dev \
+        ca-certificates curl git golang-go build-essential unzip libpcap-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Tools Argus appelle en subprocess. Versions PINNED pour repro builds.
-# Pour mettre à jour: `git ls-remote --tags --refs https://<repo>.git | tail`.
-# IMPORTANT: pas de commentaires shell `#` à l'intérieur d'un RUN multi-ligne
-# avec `\` continuation — Docker concat les lignes en supprimant le `\<newline>`,
-# ce qui fait que le `#` commenterait tout le reste du bloc.
+# Tools the pipeline shells out to. Pinned for reproducible builds.
+# NB: no inline `#` comments inside a `\`-continued RUN — Docker joins the
+# lines and the `#` would comment out the rest of the package list.
 ARG SUBFINDER_VER=v2.14.0
 ARG ASSETFINDER_VER=v0.1.1
 ARG DNSX_VER=v1.2.3
@@ -51,6 +49,7 @@ ARG GOSPIDER_VER=v1.1.6
 ARG NAABU_VER=v2.6.1
 ARG CDNCHECK_VER=v1.2.35
 ARG TRUFFLEHOG_VER=v3.95.3
+ARG SOURCEMAPPER_REV=latest
 
 RUN set -eux; mkdir -p /go/bin; \
     go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@${SUBFINDER_VER}      ; \
@@ -71,26 +70,25 @@ RUN set -eux; mkdir -p /go/bin; \
     go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@${NUCLEI_VER}               ; \
     go install github.com/hahwul/dalfox/v2@${DALFOX_VER}
 
-# Non-critiques (m01 active, m05 jsluice, m03 gospider) — `|| true` au cas où un
-# pin tomberait. Pas la fin du monde si une de ces deps échoue, le pipeline
-# dégrade gracieusement.
+RUN set -eux; \
+    go install github.com/projectdiscovery/naabu/v2/cmd/naabu@${NAABU_VER}                  ; \
+    go install github.com/projectdiscovery/cdncheck/cmd/cdncheck@${CDNCHECK_VER}
+
+# Non-critical (pipeline degrades gracefully if a pin breaks): shuffledns,
+# gospider, jsluice (m11), sourcemapper (m11 source-map recovery), trufflehog.
 RUN set -eu; \
     go install github.com/projectdiscovery/shuffledns/cmd/shuffledns@${SHUFFLEDNS_VER} || true ; \
     go install github.com/jaeles-project/gospider@${GOSPIDER_VER}                      || true ; \
-    go install github.com/BishopFox/jsluice/cmd/jsluice@${JSLUICE_REV}                 || true
+    go install github.com/BishopFox/jsluice/cmd/jsluice@${JSLUICE_REV}                 || true ; \
+    go install github.com/denandz/sourcemapper@${SOURCEMAPPER_REV}                     || true ; \
+    go install github.com/trufflesecurity/trufflehog/v3@${TRUFFLEHOG_VER}              || true
 
-# Phase 1 tools — naabu/cdncheck for m11, trufflehog for m10.
-RUN set -eu; \
-    go install github.com/projectdiscovery/naabu/v2/cmd/naabu@${NAABU_VER}                   ; \
-    go install github.com/projectdiscovery/cdncheck/cmd/cdncheck@${CDNCHECK_VER}             ; \
-    go install github.com/trufflesecurity/trufflehog/v3@${TRUFFLEHOG_VER}                    || true
-
-# Findomain (Rust) — official GitHub release zip
+# Findomain (Rust) — official GitHub release binary.
 RUN curl -sSL -o /tmp/findomain.zip \
         https://github.com/findomain/findomain/releases/latest/download/findomain-linux.zip \
     && cd /tmp && unzip -o findomain.zip && chmod +x findomain \
     && mv findomain /go/bin/findomain && rm -f /tmp/findomain.zip \
-    || echo "[warn] findomain release download failed — multi-source m01 will degrade gracefully"
+    || echo "[warn] findomain download failed — m02 multi-source degrades gracefully"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -106,23 +104,22 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PLAYWRIGHT_BROWSERS_PATH=/home/kali/.cache/ms-playwright \
-    PATH=/home/kali/argus/argus-env/bin:/home/kali/go/bin:/usr/local/go-tools/bin:/home/kali/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/home/kali/h4wk3y3/argus-env/bin:/home/kali/go/bin:/home/kali/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # ── 1. System packages ───────────────────────────────────────
-# Groups (ne PAS écrire ces commentaires INSIDE le RUN avec `\` continuation,
-# bash les interprète comme commentaires shell et coupe la liste de paquets) :
-#   Core             : ca-certificates curl wget git unzip jq tzdata
-#   Python runtime   : python3 python3-pip python3-venv python3-dev
-#   Build (wheels)   : build-essential libxml2-dev libxslt1-dev libffi-dev libssl-dev
-#   Active recon     : nmap sqlmap dirsearch ffuf gobuster nikto
-#   Wordlists        : seclists
-#   Chromium deps    : libnss3 libnspr4 libatk* libcups2 libdrm2 libxkbcommon0 etc.
-#   JS runtime       : nodejs npm
+#   Core            : ca-certificates curl wget git unzip jq tzdata
+#   Python runtime  : python3 python3-pip python3-venv python3-dev
+#   Wheel build deps: build-essential libxml2-dev libxslt1-dev libffi-dev libssl-dev
+#   Active recon    : nmap sqlmap ffuf rustscan wafw00f testssl.sh
+#   Net / dns       : whois dnsutils libpcap0.8
+#   Wordlists       : seclists
+#   Chromium deps   : libnss3 ... fonts-liberation (mandatory for Playwright m05)
+#   JS runtime      : nodejs npm
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl wget git unzip jq tzdata \
         python3 python3-pip python3-venv python3-dev \
         build-essential libxml2-dev libxslt1-dev libffi-dev libssl-dev \
-        nmap sqlmap dirsearch ffuf gobuster nikto \
+        nmap sqlmap ffuf rustscan wafw00f \
         whois testssl.sh dnsutils libpcap0.8 \
         seclists \
         libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
@@ -132,45 +129,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
-# ── 2. Non-root user matching le repo (paths /home/kali/... codés en dur) ──
-# argus.py:24-29 référence /home/kali/go/bin et autres → on garde cet UID/path
+# ── 2. Non-root user (the code hardcodes /home/kali/... tool paths) ──
 RUN useradd -m -u 1000 -s /bin/bash kali \
-    && mkdir -p /home/kali/go/bin /usr/local/go-tools/bin /home/kali/.local/bin \
+    && mkdir -p /home/kali/go/bin /home/kali/.local/bin \
                 /home/kali/.config/subfinder /home/kali/.config/nuclei \
                 /home/kali/.cache/ms-playwright \
     && chown -R kali:kali /home/kali
 
-# ── 3. Go binaries (depuis stage 1) ─────────────────────────
+# ── 3. Go binaries (from stage 1) ───────────────────────────
 COPY --from=go-builder --chown=kali:kali /go/bin/ /home/kali/go/bin/
 
-# ── 4. Argus source code ────────────────────────────────────
-# Build context = the repo root (parent of deploy/). The source IS the repo.
-# argus-env/, output/, data/argus.db, __pycache__, deploy/volumes/ etc. are
-# excluded via .dockerignore at the repo root. The deploy/ subdir itself is
-# copied (~30 KB) — harmless and keeps the layout self-describing in-image.
-COPY --chown=kali:kali . /home/kali/argus/
+# ── 4. Application source ────────────────────────────────────
+# Build context = repo root (parent of deploy/). argus-env/, output/,
+# __pycache__/, .git/, deploy/volumes/ excluded via .dockerignore.
+COPY --chown=kali:kali . /home/kali/h4wk3y3/
 
-# ── 5. Python venv (le code re-execve dans argus-env via argus.py:18-20) ──
+# ── 5. Python venv (h4wk3y3.py re-execs into argus-env) ─────
 USER kali
-WORKDIR /home/kali/argus
+WORKDIR /home/kali/h4wk3y3
 
-# All runtime deps (incl. ruamel.yaml, dnspython, arjun, uro, psutil) are now
-# declared in requirements.txt — single source of truth, no ad-hoc installs.
-RUN python3 -m venv /home/kali/argus/argus-env \
-    && /home/kali/argus/argus-env/bin/pip install --upgrade pip wheel setuptools \
-    && /home/kali/argus/argus-env/bin/pip install -r /home/kali/argus/requirements.txt \
-    && /home/kali/argus/argus-env/bin/playwright install chromium
+RUN python3 -m venv /home/kali/h4wk3y3/argus-env \
+    && /home/kali/h4wk3y3/argus-env/bin/pip install --upgrade pip wheel setuptools \
+    && /home/kali/h4wk3y3/argus-env/bin/pip install -r /home/kali/h4wk3y3/requirements.txt \
+    && /home/kali/h4wk3y3/argus-env/bin/playwright install chromium
 
-# ── 6. Nuclei templates (snapshot at build, refreshable via volume) ──────
+# ── 6. Nuclei templates (snapshot at build, refreshable via volume) ──
 RUN /home/kali/go/bin/nuclei -update-templates -silent || true
 
-# ── 7. Resolvers & wordlists (fallback si volume non monté) ─────────────
-RUN mkdir -p /home/kali/argus/data/resolvers /home/kali/argus/data/wordlists \
+# ── 7. Resolvers (fallback if the volume isn't mounted) ─────
+RUN mkdir -p /home/kali/h4wk3y3/data/resolvers \
     && curl -sL https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt \
-         -o /home/kali/argus/data/resolvers/resolvers.txt 2>/dev/null \
-    || echo "[warn] resolvers download failed at build — will fallback to in-code list"
+         -o /home/kali/h4wk3y3/data/resolvers/resolvers.txt 2>/dev/null \
+    || echo "[warn] resolvers download failed at build — in-code fallback used"
 
-# ── 8. gf patterns (pour m07 — modules.m07 lance `gf <pattern>`) ─────────
+# ── 8. gf patterns (m12 runs `gf <pattern>`) ────────────────
 RUN git clone --depth=1 https://github.com/tomnomnom/gf /tmp/gf-src 2>/dev/null \
     && mkdir -p /home/kali/.gf \
     && cp /tmp/gf-src/examples/*.json /home/kali/.gf/ 2>/dev/null \
@@ -181,19 +173,17 @@ RUN git clone --depth=1 https://github.com/tomnomnom/gf /tmp/gf-src 2>/dev/null 
     || echo "[warn] gf pattern repos clone failed"
 
 USER root
-# entrypoint.sh lives in deploy/ relative to the build context (= repo root)
 COPY --chown=kali:kali deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 USER kali
-WORKDIR /home/kali/argus
+WORKDIR /home/kali/h4wk3y3
 
 EXPOSE 8000
-VOLUME ["/home/kali/argus/output", "/home/kali/argus/data", "/home/kali/.config/subfinder", "/home/kali/.config/nuclei", "/home/kali/.cache/ms-playwright"]
+VOLUME ["/home/kali/h4wk3y3/output", "/home/kali/h4wk3y3/data", \
+        "/home/kali/.config/subfinder", "/home/kali/.config/nuclei", \
+        "/home/kali/.cache/ms-playwright"]
 
-# Liveness/readiness. Lives in the Dockerfile (not only docker-compose) so it
-# also applies to `docker run`, k8s without an explicit probe, swarm, etc.
-# /api/health always returns 200 while serving; a non-200/timeout = unhealthy.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
 

@@ -1,220 +1,131 @@
-# Argus — Docker deployment
+# h4wk3y3 — Docker deployment
 
-Container deployment for Argus V2 (Postgres-only runtime since 2026-05).
-Lives **inside the repo** at `<repo>/deploy/` so there is a single source of
-truth — the orchestration files reference the parent (repo root) as the build
-context.
+Self-contained container build. **Every recon tool is baked into the image**
+— deploy on any host that has Docker, with zero host-side tool install. Lives
+inside the repo at `<repo>/deploy/`; the build context is the repo root so the
+image bakes the actual source (single source of truth).
 
-Image base: `kalilinux/kali-rolling` (mirrors the dev environment), all Go
-binaries pre-built in a separate stage.
+Base image: `kalilinux/kali-rolling`. Multi-stage: the Go SDK stays in a
+builder stage, only the compiled binaries land in the runtime image.
 
 ---
 
 ## Topology
 
 ```
-┌──────────────────────────┐    ┌────────────────────────┐
-│  postgres (postgres:18)  │◄───│  argus (kalilinux)     │
-│  - argus_main DB         │    │  - FastAPI dashboard   │
-│  - healthcheck pg_isready│    │  - scan pipeline       │
-│  - volume: argus-postgres-data│  - depends_on: postgres healthy
-└──────────────────────────┘    └────────────────────────┘
-                                          │
-                                          ▼ entrypoint pre-flight
-                                  1. wait for postgres
-                                  2. alembic upgrade head
-                                  3. resolvers refresh
-                                  4. dashboard host → 0.0.0.0
+┌────────────────────────────┐     ┌──────────────────────────┐
+│ postgres (postgres:18)     │◄────│ h4wk3y3 (kali-rolling)   │
+│  - DB  h4wk3y3             │     │  - FastAPI dashboard     │
+│  - volume postgres-data    │     │  - 14-module pipeline    │
+│  - healthcheck pg_isready  │     │  - depends_on: healthy   │
+└────────────────────────────┘     └──────────────────────────┘
+                                            │ entrypoint pre-flight
+                                            ▼ 1. wait for postgres
+                                              2. alembic upgrade head
+                                              3. dashboard host → 0.0.0.0
+                                              4. refresh resolvers
 ```
 
-The argus service receives `ARGUS_DB_URL` pointing at the postgres service
-on the internal compose network. The same env var is consumed by
-`core/db_engine.resolve_db_url` (runtime) and `alembic/env.py` (migrations),
-so the URL stays in sync between the app and `alembic upgrade head`.
+The dashboard is published on the **host loopback only** (`127.0.0.1:8000`),
+so it is never exposed to the internet. Reach it through an SSH tunnel.
+
+---
+
+## Quick start (build-on-host)
+
+```bash
+cd deploy
+./build.sh                 # creates .env (random DB password) + volumes + builds
+                           # first build pulls kali base + bakes tools (~few min)
+make up                    # start postgres + dashboard
+
+# From your laptop — tunnel the loopback port, then browse:
+ssh -L 8000:127.0.0.1:8000 <user>@<vps>
+#   → http://localhost:8000
+#   First-boot admin password: volumes/data/.first_admin (mode 0600). Read it,
+#   log in, delete the file.
+
+# One-shot scans (run the same migrations + wait for postgres)
+make scan      T=example.com    # full
+make scan-fast T=example.com    # m01..m05 + m09
+
+make update-templates           # refresh nuclei templates
+make logs                       # follow logs
+make shell                      # bash inside the container
+```
+
+---
+
+## Deploy on another machine
+
+Nothing host-specific is required beyond Docker. From the repo (or a clone):
+
+```bash
+git clone <repo-url> h4wk3y3 && cd h4wk3y3/deploy
+./build.sh
+vi .env                    # set a real POSTGRES_PASSWORD + any API keys
+make up
+```
+
+Because all tools are in the image, the target host needs **only Docker** —
+no nuclei/subfinder/playwright/etc. pre-installed.
 
 ---
 
 ## Layout
 
 ```
-<repo>/
-├── argus.py, core/, modules/, dashboard/, ...    ← code (single source of truth)
-├── config/, scopes/, data/, wildcards
-├── alembic/, alembic.ini
-├── .dockerignore                                  ← excludes argus-env, output, etc.
-└── deploy/                                        ← you are here
-    ├── Dockerfile
-    ├── docker-compose.yml
-    ├── entrypoint.sh
-    ├── build.sh                                   (idempotent bootstrap + build)
-    ├── Makefile                                   (convenience targets)
-    ├── README.md (this file)
-    ├── .env.example
-    ├── .env                                       ← created from .env.example by build.sh
-    └── volumes/                                   ← runtime data (persisted across rebuilds)
-        ├── output/                                  scan results (per domain)
-        ├── data/                                    auth secrets + caches + resolvers
-        ├── config/argus.yaml                        editable; dashboard /api/config writes here
-        ├── scopes/                                  multi-org scope-as-code YAML (Étape 2.2)
-        ├── wildcards                                legacy target whitelist
-        └── subfinder/                               provider-config.yaml (API keys)
+deploy/
+├── Dockerfile            multi-stage (go-builder + runtime)
+├── docker-compose.yml    h4wk3y3 + postgres (+ scan profile)
+├── entrypoint.sh         pre-flight (wait DB, alembic, host patch, resolvers)
+├── build.sh              idempotent bootstrap + build
+├── Makefile              convenience targets
+├── .env.example          → copy to .env (build.sh does it)
+└── volumes/              runtime data, persisted across rebuilds
+    ├── output/             scan results (per domain)
+    ├── data/               .session_secret, .first_admin, caches
+    ├── config/h4wk3y3.yaml editable; dashboard /api/config writes here
+    ├── scopes/             per-org scope-as-code YAML
+    ├── wildcards           authorised scan targets (allowlist)
+    └── subfinder/          provider-config.yaml (API keys)
 ```
 
-Plus 3 named Docker volumes:
-
-- `argus-postgres-data`     — the Postgres data directory
-- `argus-nuclei-templates`  — nuclei templates, refreshable out-of-band
-- `argus-playwright`        — Chromium cache (~400 MB), avoids re-DL on rebuild
+Named Docker volumes: `h4wk3y3-postgres-data`, `h4wk3y3-nuclei-templates`,
+`h4wk3y3-playwright` (Chromium cache, avoids re-download on rebuild).
 
 ---
 
-## Quick start
+## Raw-socket scanning
 
-```bash
-cd deploy
-./build.sh                    # bootstrap volumes + .env + docker compose build
-vi .env                       # set POSTGRES_PASSWORD + PDCP_API_KEY (recommended)
-make up                       # starts BOTH postgres AND dashboard
-# → http://localhost:8000
-#   On first boot, the bootstrap super-admin password is written to
-#   volumes/data/.first_admin (mode 0600). Read it, log in, delete the file.
-
-# One-shot scan (runs the same migrations + waits for postgres healthy)
-make scan T=example.com       # full
-make scan-fast T=example.com  # m02..m05 only
-
-# Update nuclei templates
-make update-templates
-```
-
-### What `make up` does under the hood
-
-1. Compose starts the **postgres** service first, runs `pg_isready` until it goes healthy
-2. Then starts the **argus** service. Its entrypoint:
-   - waits for `ARGUS_DB_URL` to accept SELECT 1 (defensive)
-   - runs `alembic upgrade head` (idempotent)
-   - patches `dashboard.host` to `0.0.0.0` in the mounted argus.yaml
-   - launches the FastAPI dashboard via `./run.sh --dashboard`
-3. Docker's healthcheck pings `/api/health` every 15s and marks the container unhealthy after 5 failed attempts.
-
----
-
-## Deploying to another machine
-
-The whole repo is portable. From the parent of the repo:
-
-```bash
-# Source host
-tar czhf argus-deploy.tar.gz \
-    --exclude='argus-env' --exclude='output' \
-    --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
-    --exclude='deploy/volumes' --exclude='deploy/.env' \
-    -C ~ argus
-scp argus-deploy.tar.gz user@target:/opt/
-
-# Target host (Docker installed, 16 GB RAM recommended)
-cd /opt && tar xzf argus-deploy.tar.gz && cd argus/deploy
-./build.sh
-vi .env                       # CHANGE POSTGRES_PASSWORD before exposing anything
-make up
-```
-
----
-
-## Using an external Postgres
-
-To bypass the bundled `postgres` service and target a managed DB (RDS, Cloud
-SQL, etc.), set `ARGUS_DB_URL` in `.env`:
-
-```env
-ARGUS_DB_URL=postgresql+psycopg://argus:secret@db.internal:5432/argus_main
-```
-
-Then comment out or remove the `postgres:` service block from
-`docker-compose.yml` AND its `depends_on:` declaration on the argus service.
-The entrypoint will still run `alembic upgrade head` against the external DB.
-
----
-
-## Resource sizing
-
-The compose file caps the argus container at **14 GB RAM** on a 16 GB host
-(`mem_limit: 14g`, `memswap_limit: 14g` to avoid swap thrashing). `/dev/shm`
-is bumped to **2 GB** — mandatory for Playwright / Chromium (m05); the default
-64 MB causes silent crashes.
-
-### Concurrency tuning (16 GB headroom)
-
-The defaults in `config/argus.yaml` were picked for a 4 GB box.
-With 16 GB you can safely raise (in `volumes/config/argus.yaml`, hot-editable):
-
-```yaml
-fetcher:
-  max_extra_urls: 2000        # was 800
-  max_body_size: 5_000_000    # was 2_000_000
-screenshot:
-  concurrent: 6               # was 3
-js_analyzer:
-  max_js_files: 1500          # was 500
-nuclei:
-  max_host_error: 500         # was 200
-```
-
----
+`rustscan` (SYN), `naabu` and `nmap -sS` need raw sockets — the compose file
+grants `cap_add: [NET_RAW, NET_ADMIN]`. Without them those tools fall back to
+slower TCP-connect scans (the pipeline still works, just noisier/slower on m07).
 
 ## DNS
 
-Argus is DNS-intensive (m02 hits 6 passive sources + bulk A/CNAME/MX/TXT). The
-compose file forces public DNS (`1.1.1.1`, `8.8.8.8`, `9.9.9.9`) to bypass
-Docker's embedded resolver, which throttles at scale.
-
----
+The pipeline is DNS-intensive (m02). The compose file forces public DNS
+(`1.1.1.1 / 8.8.8.8 / 9.9.9.9`) to bypass Docker's embedded resolver, which
+throttles at scale.
 
 ## API keys
 
-| Source | Where to drop key |
+| Source | Where |
 |---|---|
-| Chaos (projectdiscovery) | `.env` → `PDCP_API_KEY=...` |
-| Subfinder providers (shodan, virustotal, securitytrails, censys, github…) | `volumes/subfinder/provider-config.yaml` |
-| GitHub (subfinder github source) | `.env` → `GH_TOKEN=...` |
+| Chaos (projectdiscovery) | `.env` → `PDCP_API_KEY=` |
+| GitHub (subfinder + m01) | `.env` → `GH_TOKEN=` / `GITHUB_TOKEN=` |
+| Subfinder providers (shodan/vt/securitytrails/censys…) | `volumes/subfinder/provider-config.yaml` |
+| HIBP (m01) | `.env` → `HIBP_API_KEY=` |
 
----
+## Editing source
 
-## Editing source code (the whole point of this layout)
-
-Just edit the files directly in the repo (above this directory). The Docker
-image bakes them on the next build. No `src/` copy, no sync helpers, no
-divergence.
-
-To pick up source changes in a running container:
+Edit files in the repo, then `make rebuild && make up`. For a quick iteration
+without a full rebuild:
 
 ```bash
-make rebuild      # full rebuild (~2-3 min thanks to layer cache)
-make up
+docker cp ../modules/m13_nuclei.py h4wk3y3:/home/kali/h4wk3y3/modules/
+docker compose restart h4wk3y3
 ```
-
-Or for a quick iteration without rebuilding, copy the file into the running
-container:
-
-```bash
-docker cp ../modules/m03_http_validator.py argus:/home/kali/argus/modules/
-docker compose restart argus
-```
-
----
-
-## Multi-org / scope-as-code (Étape 2.1 + 2.2)
-
-Organisations and target ↔ org links live in Postgres (tables
-`organisations` + `targets`, migration `0002`). Manage them via:
-
-- **UI** : sidebar `ADMIN > Orgs` → modal create/edit/link
-- **CLI inside the container** : `docker compose exec argus argus org list`
-- **CLI outside** (any psql client) : direct SQL on `argus_main`
-
-The per-org scope YAML files sit under `volumes/scopes/<apex>.yaml` (mounted
-into `/home/kali/argus/scopes/`). Edit them on the host, the next scan picks
-them up — no container restart needed.
 
 ---
 
@@ -222,26 +133,24 @@ them up — no container restart needed.
 
 | Task | Command |
 |---|---|
-| Open dashboard | `make up` then http://localhost:8000 |
-| Tail logs | `make logs` |
-| Get a shell inside | `make shell` |
-| Connect to Postgres | `docker compose exec postgres psql -U argus -d argus_main` |
-| Run a single module | `docker compose run --rm scan raw ./run.sh -t example.com --modules m02,m03 -v` |
-| Inspect output | `ls volumes/output/<domain>/` |
-| Refresh nuclei templates | `make update-templates` |
-| Manage orgs from CLI | `docker compose exec argus argus org list` |
-| Force full rebuild | `make rebuild` |
-| Backup the DB | `docker compose exec postgres pg_dump -U argus argus_main > backup.sql` |
-| Wipe volumes (data loss!) | `make purge` |
+| Start | `make up` |
+| Logs | `make logs` |
+| Shell | `make shell` |
+| psql | `docker compose exec postgres psql -U h4wk3y3 -d h4wk3y3` |
+| Backup DB | `docker compose exec postgres pg_dump -U h4wk3y3 h4wk3y3 > backup.sql` |
+| Single module | `docker compose run --rm scan raw ./run.sh -t example.com --modules m02,m03 -v` |
+| Rebuild (no cache) | `make rebuild` |
+| Wipe volumes (DATA LOSS) | `make purge` |
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Diagnosis | Fix |
-|---|---|---|
-| `dashboard` container restart-loops | postgres not healthy yet | `docker compose logs postgres` — should say "database system is ready" |
-| 500 on /api/findings after upgrade | new migration not applied | `docker compose restart argus` (entrypoint reruns `alembic upgrade head`) |
-| `dashboard.host: 127.0.0.1` persists | sed in entrypoint failed on bind-mount | rewrite `volumes/config/argus.yaml:dashboard.host` to `"0.0.0.0"` manually |
-| `make scan` errors "no DSN configured" | env var not propagated to scan service | scan extends argus, so `ARGUS_DB_URL` is inherited — check `.env` actually has POSTGRES_* set |
-| `volumes/` owned by root after `sudo` build | normal | re-run `sudo ./build.sh` (the script re-chowns to UID 1000) |
+| Symptom | Fix |
+|---|---|
+| `h4wk3y3` restart-loops | `docker compose logs postgres` — wait for "database system is ready" |
+| 500 on `/api/findings` after upgrade | `docker compose restart h4wk3y3` (entrypoint reruns `alembic upgrade head`) |
+| Dashboard not reachable | it binds host loopback only — use the SSH tunnel (`make tunnel`) |
+| `make scan` "no DSN configured" | `.env` missing POSTGRES_* — the scan service inherits `ARGUS_DB_URL` from them |
+| `volumes/` root-owned after sudo build | re-run `sudo ./build.sh` (re-chowns to UID 1000) |
+| rustscan/naabu slow or 0 ports | confirm `cap_add: [NET_RAW, NET_ADMIN]` is present (raw sockets) |

@@ -1,117 +1,99 @@
 # ============================================================
-#  Argus V2 — docker-compose
+#  h4wk3y3 — docker-compose
 #
-#  Lives in <repo>/deploy/. Build context = the repo root (..) so the
-#  Docker image bakes the actual source — single source of truth, no
-#  duplication. Tar the whole repo + this directory to redeploy elsewhere.
+#  Build context = repo root (..) so the image bakes the actual source.
+#  Self-contained: every recon tool is in the image — deploy on ANY host
+#  with Docker, no host-side tool install needed.
 #
-#  Topology (Argus est Postgres-only depuis 2026-05):
-#    postgres  → DB persistante (volume argus-postgres-data)
-#    argus     → app principale, dépend de postgres healthy
-#    scan      → service éphémère pour scans one-shot
+#  Topology:
+#    postgres  → persistent DB (volume h4wk3y3-postgres-data)
+#    h4wk3y3   → app + dashboard, depends on postgres healthy
+#    scan      → ephemeral one-shot scan service (profile: scan)
 #
-#  Usage (from this directory):
-#    docker compose build
-#    docker compose up -d                            # postgres + dashboard
-#    docker compose run --rm scan scan example.com --full
+#  Quick start (from this directory):
+#    ./build.sh                        # bootstrap .env + volumes + build
+#    make up                           # postgres + dashboard
+#    make scan T=example.com           # one-shot full scan
+#
+#  Dashboard is published on 127.0.0.1 ONLY — reach it via SSH tunnel:
+#    ssh -L 8000:127.0.0.1:8000 <user>@<vps>   →   http://localhost:8000
 # ============================================================
 
-# Force the Compose project name regardless of the host directory we're invoked
-# from. Without this, Compose derives the project name from the directory
-# (e.g. "deploy") and creates fresh volumes prefixed `deploy_…`, leaving any
-# previously-created `argus_…` volumes orphaned.
-name: argus
+name: h4wk3y3
 
 services:
-  # ── Postgres backend (Argus runtime canonical store) ────────
+  # ── Postgres backend (canonical store) ──────────────────────
   postgres:
     image: postgres:18-alpine
-    container_name: argus-postgres
+    container_name: h4wk3y3-postgres
     hostname: postgres
-
     environment:
-      POSTGRES_USER:     ${POSTGRES_USER:-argus}
+      POSTGRES_USER:     ${POSTGRES_USER:-h4wk3y3}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (no default — would be a public password)}
-      POSTGRES_DB:       ${POSTGRES_DB:-argus_main}
-      # PG18 sometimes ships a collation older than the host glibc.
-      # Set ICU as default to sidestep the version-mismatch warning.
+      POSTGRES_DB:       ${POSTGRES_DB:-h4wk3y3}
       POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=en-US"
-
     volumes:
-      - argus-postgres-data:/var/lib/postgresql/data
-
-    # Healthcheck so the argus service can `depends_on: postgres: condition: service_healthy`
+      - h4wk3y3-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-argus} -d ${POSTGRES_DB:-argus_main}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-h4wk3y3} -d ${POSTGRES_DB:-h4wk3y3}"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 10s
-
     restart: unless-stopped
-
-    # Postgres is internal to the compose network — uncomment to expose
-    # it on the host (debugging only — never expose to the internet).
+    # Internal to the compose network. Uncomment for local debugging only.
     # ports:
     #   - "127.0.0.1:5432:5432"
 
-  # ── Argus app ───────────────────────────────────────────────
-  argus:
+  # ── h4wk3y3 app + dashboard ─────────────────────────────────
+  h4wk3y3:
     build:
-      context: ..                       # repo root
+      context: ..
       dockerfile: deploy/Dockerfile
-      # BuildKit required (default on Docker 23+)
-    image: argus:latest
-    container_name: argus
-    hostname: argus
+    image: h4wk3y3:latest
+    container_name: h4wk3y3
+    hostname: h4wk3y3
 
     depends_on:
       postgres:
         condition: service_healthy
 
-    # 16 GB host → laisse 2 GB pour l'OS, garantit un kill propre vs OOM silencieux
-    mem_limit: 14g
-    memswap_limit: 14g
-    shm_size: 2g            # ⚠ critique pour Playwright/Chromium dans m05
+    # Raw-socket scanners (rustscan SYN, naabu, nmap -sS) need these caps.
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
 
-    # DNS public → évite l'embedded resolver Docker (127.0.0.11) qui throttle m02
+    mem_limit: ${H4_MEM_LIMIT:-8g}
+    shm_size: 2g            # mandatory for Playwright/Chromium (m05)
+
     dns:
       - 1.1.1.1
       - 8.8.8.8
       - 9.9.9.9
 
     env_file:
-      - .env                # PDCP_API_KEY, GH_TOKEN, etc. (voir .env.example)
+      - .env
 
     environment:
       TZ: ${TZ:-UTC}
-      # DB DSN pointing at the postgres service. Lu en priorité par
-      # core/db_engine.resolve_db_url + alembic/env.py, donc l'app et les
-      # migrations utilisent la même connexion sans toucher au YAML.
-      ARGUS_DB_URL: "postgresql+psycopg://${POSTGRES_USER:-argus}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (no default — would be a public password)}@postgres:5432/${POSTGRES_DB:-argus_main}"
+      # DSN for the postgres service. Read by core/db_engine.resolve_db_url
+      # AND alembic/env.py, so app + migrations share one connection.
+      ARGUS_DB_URL: "postgresql+psycopg://${POSTGRES_USER:-h4wk3y3}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-h4wk3y3}"
 
+    # Published on the HOST loopback only → not exposed to the internet.
+    # Reach it through an SSH tunnel (see header).
     ports:
-      - "${ARGUS_DASHBOARD_PORT:-8000}:8000"
+      - "127.0.0.1:${H4_DASHBOARD_PORT:-8000}:8000"
 
     volumes:
-      # Persistance des résultats — output JSON, screenshots, bodies
-      - ./volumes/output:/home/kali/argus/output
-      # data/ : .session_secret, .first_admin, cache crt.sh, resolvers, wordlists.
-      # La DB Postgres tourne dans le service `postgres` (volume argus-postgres-data).
-      - ./volumes/data:/home/kali/argus/data
-      # Config éditable hors-container (le dashboard /api/config écrit dedans)
-      - ./volumes/config/argus.yaml:/home/kali/argus/config/argus.yaml
-      # Scope-as-code (Étape 2.2) — un YAML par org, hot-éditable
-      - ./volumes/scopes:/home/kali/argus/scopes
-      # Wildcards = liste blanche des domaines scannables (sécurité quand
-      # dashboard sur 0.0.0.0). Edit puis `docker compose restart argus`.
-      - ./volumes/wildcards:/home/kali/argus/wildcards
-      # API keys subfinder (fournir provider-config.yaml ici)
+      - ./volumes/output:/home/kali/h4wk3y3/output
+      - ./volumes/data:/home/kali/h4wk3y3/data
+      - ./volumes/config/h4wk3y3.yaml:/home/kali/h4wk3y3/config/h4wk3y3.yaml
+      - ./volumes/scopes:/home/kali/h4wk3y3/scopes
+      - ./volumes/wildcards:/home/kali/h4wk3y3/wildcards
       - ./volumes/subfinder:/home/kali/.config/subfinder
-      # Nuclei templates — refresh out-of-band via `docker compose run argus update-templates`
-      - argus-nuclei-templates:/home/kali/.config/nuclei
-      # Playwright Chromium cache — évite re-download à chaque rebuild d'image
-      - argus-playwright:/home/kali/.cache/ms-playwright
+      - h4wk3y3-nuclei-templates:/home/kali/.config/nuclei
+      - h4wk3y3-playwright:/home/kali/.cache/ms-playwright
 
     healthcheck:
       test: ["CMD-SHELL", "curl -fs http://localhost:8000/api/health || exit 1"]
@@ -121,27 +103,24 @@ services:
       start_period: 30s
 
     restart: unless-stopped
-
-    # Pour les scans one-shot, override avec `docker compose run --rm scan ...`
     command: ["dashboard"]
 
-  # Service ephemère pour lancer un scan (n'a pas le port mapping ni restart)
+  # ── Ephemeral one-shot scan job ─────────────────────────────
   scan:
     extends:
-      service: argus
-    container_name: argus-scan
-    profiles: ["scan"]       # ne démarre PAS avec `compose up`
+      service: h4wk3y3
+    container_name: h4wk3y3-scan
+    profiles: ["scan"]
     restart: "no"
     ports: []
-    # Pas de healthcheck — c'est un job batch, pas un service
     healthcheck:
       disable: true
     command: ["scan", "example.com", "--full"]
 
 volumes:
-  argus-nuclei-templates:
-    name: argus-nuclei-templates
-  argus-playwright:
-    name: argus-playwright
-  argus-postgres-data:
-    name: argus-postgres-data
+  h4wk3y3-nuclei-templates:
+    name: h4wk3y3-nuclei-templates
+  h4wk3y3-playwright:
+    name: h4wk3y3-playwright
+  h4wk3y3-postgres-data:
+    name: h4wk3y3-postgres-data
