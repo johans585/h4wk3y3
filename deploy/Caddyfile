@@ -1,17 +1,52 @@
-# h4wk3y3 — Caddy reverse proxy with automatic Let's Encrypt TLS.
+# h4wk3y3 — Caddy reverse proxy, hardened for internet exposure.
 #
-# H4_SITE_ADDRESS (from .env) is the public name, e.g. 13.140.176.243.nip.io
-# — nip.io maps any IP to a DNS name, so LE can issue a cert without owning a
-# domain. Host port 80 is taken by another service, so the HTTP-01 challenge
-# fails and Caddy automatically falls back to TLS-ALPN-01 on 443.
+# H4_SITE_ADDRESS (.env) is a name resolved via a LOCAL hosts entry (no public
+# DNS), e.g. app.h4wk3y3.io → <vps-ip>. Because there is no public DNS, Let's
+# Encrypt can't validate it, so we use Caddy's INTERNAL CA (`tls internal`).
+# Install Caddy's root cert on your machine to trust it (see deploy README).
+#
+# Defense in depth (in order):
+#   0. Bare-IP / wrong-Host traffic → 403 (the app is invisible to scanners).
+#   1. Mandatory pre-shared header  X-H4-Key: {$H4_ACCESS_KEY}  → else 403.
+#   2. HTTP basic auth              ({$H4_BASIC_USER} / bcrypt hash).
+#   3. The dashboard's own login    (bcrypt + signed session + CSRF + RBAC).
+#   + TLS everywhere.
+
+{
+	# auto_https off would disable TLS; we keep it on with the internal issuer.
+	# Internal CA only — nothing is requested from a public ACME CA.
+	auto_https disable_redirects
+}
+
+# Catch-all: anything hitting the IP on 443 without the exact hostname gets 403.
+:443 {
+	tls internal
+	respond 403
+}
 
 {$H4_SITE_ADDRESS} {
+	tls internal
+
+	route {
+		# Gate 1 — mandatory secret header (static value from .env).
+		@nokey not header X-H4-Key "{$H4_ACCESS_KEY}"
+		respond @nokey "Forbidden" 403
+
+		# Gate 2 — HTTP basic auth (bcrypt hash from .env).
+		basic_auth {
+			{$H4_BASIC_USER} {$H4_BASIC_HASH}
+		}
+
+		# Gate 3 — proxy to the dashboard (which has its own login).
+		reverse_proxy h4wk3y3:8000
+	}
+
 	encode zstd gzip
-	reverse_proxy h4wk3y3:8000
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "no-referrer"
 		-Server
 	}
 }

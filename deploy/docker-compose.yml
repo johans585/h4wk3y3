@@ -118,8 +118,13 @@ services:
       h4wk3y3:
         condition: service_healthy
     environment:
-      # Public name → real LE cert via nip.io (set in .env), e.g. 1.2.3.4.nip.io
-      H4_SITE_ADDRESS: ${H4_SITE_ADDRESS:?set H4_SITE_ADDRESS in .env (e.g. <your-ip>.nip.io)}
+      # Hostname served (resolved via your local hosts file), e.g. app.h4wk3y3.io
+      H4_SITE_ADDRESS: ${H4_SITE_ADDRESS:?set H4_SITE_ADDRESS in .env (e.g. app.h4wk3y3.io)}
+      # Gate 1: mandatory secret header value (X-H4-Key). Long random string.
+      H4_ACCESS_KEY:   ${H4_ACCESS_KEY:?set H4_ACCESS_KEY in .env (long random secret)}
+      # Gate 2: HTTP basic auth user + bcrypt hash (caddy hash-password).
+      H4_BASIC_USER:   ${H4_BASIC_USER:?set H4_BASIC_USER in .env}
+      H4_BASIC_HASH:   ${H4_BASIC_HASH:?set H4_BASIC_HASH in .env (caddy hash-password)}
     ports:
       - "443:443"
       - "443:443/udp"      # HTTP/3
