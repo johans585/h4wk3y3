@@ -82,9 +82,10 @@ services:
       # AND alembic/env.py, so app + migrations share one connection.
       ARGUS_DB_URL: "postgresql+psycopg://${POSTGRES_USER:-h4wk3y3}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-h4wk3y3}"
 
-    # Host bind address for the dashboard. Default 127.0.0.1 (loopback only —
-    # reach via SSH tunnel). Set H4_BIND=0.0.0.0 in .env to expose on the
-    # public IP (then restrict the port at the firewall + add TLS).
+    # Dashboard published on host loopback only — the public entrypoint is the
+    # caddy service (TLS on 443). Caddy reaches this over the compose network
+    # (service name h4wk3y3:8000), so no public host publish is needed here.
+    # Set H4_BIND=0.0.0.0 only if you want to bypass Caddy and expose raw HTTP.
     ports:
       - "${H4_BIND:-127.0.0.1}:${H4_DASHBOARD_PORT:-8000}:8000"
 
@@ -108,6 +109,26 @@ services:
     restart: unless-stopped
     command: ["dashboard"]
 
+  # ── Caddy reverse proxy (public TLS entrypoint) ─────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: h4wk3y3-caddy
+    hostname: caddy
+    depends_on:
+      h4wk3y3:
+        condition: service_healthy
+    environment:
+      # Public name → real LE cert via nip.io (set in .env), e.g. 1.2.3.4.nip.io
+      H4_SITE_ADDRESS: ${H4_SITE_ADDRESS:?set H4_SITE_ADDRESS in .env (e.g. <your-ip>.nip.io)}
+    ports:
+      - "443:443"
+      - "443:443/udp"      # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - h4wk3y3-caddy-data:/data      # cert persistence (avoid LE rate limits)
+      - h4wk3y3-caddy-config:/config
+    restart: unless-stopped
+
   # ── Ephemeral one-shot scan job ─────────────────────────────
   scan:
     extends:
@@ -127,3 +148,7 @@ volumes:
     name: h4wk3y3-playwright
   h4wk3y3-postgres-data:
     name: h4wk3y3-postgres-data
+  h4wk3y3-caddy-data:
+    name: h4wk3y3-caddy-data
+  h4wk3y3-caddy-config:
+    name: h4wk3y3-caddy-config

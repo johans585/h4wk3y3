@@ -1,0 +1,17 @@
+# h4wk3y3 — Caddy reverse proxy with automatic Let's Encrypt TLS.
+#
+# H4_SITE_ADDRESS (from .env) is the public name, e.g. 13.140.176.243.nip.io
+# — nip.io maps any IP to a DNS name, so LE can issue a cert without owning a
+# domain. Host port 80 is taken by another service, so the HTTP-01 challenge
+# fails and Caddy automatically falls back to TLS-ALPN-01 on 443.
+
+{$H4_SITE_ADDRESS} {
+	encode zstd gzip
+	reverse_proxy h4wk3y3:8000
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		-Server
+	}
+}
