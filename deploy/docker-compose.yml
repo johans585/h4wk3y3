@@ -144,6 +144,9 @@ services:
     container_name: h4wk3y3-scan
     profiles: ["scan"]
     restart: "no"
+    # Cap CPU so a scan never starves the host (gophish/postgres/caddy).
+    # Leave ~2 cores free on a 6-core box.
+    cpus: ${H4_SCAN_CPUS:-4.0}
     ports: []
     healthcheck:
       disable: true
