@@ -38,6 +38,13 @@ fi
 # Wildcards allowlist (authorised scan targets). Empty by default.
 [ -f volumes/wildcards ] || { touch volumes/wildcards; echo "  ✓ volumes/wildcards created (empty — add authorised apexes)"; }
 
+# Seed the constituents CSV into the data volume (the volume mount shadows the
+# image's data/ dir, so the CSV must live in the volume for `make import`).
+if [ -f "$REPO_ROOT/data/constituents.csv" ] && [ ! -f volumes/data/constituents.csv ]; then
+  cp "$REPO_ROOT/data/constituents.csv" volumes/data/constituents.csv
+  echo "  ✓ volumes/data/constituents.csv seeded — run 'make import' to load orgs/targets"
+fi
+
 # subfinder provider keys (optional)
 [ -f volumes/subfinder/provider-config.yaml ] || touch volumes/subfinder/provider-config.yaml
 

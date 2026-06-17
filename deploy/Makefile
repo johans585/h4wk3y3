@@ -12,6 +12,7 @@ help:
 	@echo "  make shell               Bash inside the running container"
 	@echo "  make scan T=example.com  One-shot full scan"
 	@echo "  make scan-fast T=...      Fast scan (m01..m05,m09)"
+	@echo "  make import              Load orgs/targets from constituents.csv"
 	@echo "  make update-templates    Refresh nuclei templates"
 	@echo "  make rebuild             Force rebuild (no cache)"
 	@echo "  make clean               Stop + remove containers (keep volumes)"
@@ -45,6 +46,10 @@ scan:
 scan-fast:
 	@test -n "$(T)" || (echo "Usage: make scan-fast T=example.com"; exit 1)
 	docker compose run --rm scan scan $(T) --fast
+
+import:
+	@echo "Importing organisations + targets from volumes/data/constituents.csv ..."
+	docker compose exec -T h4wk3y3 ./argus-env/bin/python3 import_data.py
 
 update-templates:
 	docker compose run --rm h4wk3y3 update-templates
