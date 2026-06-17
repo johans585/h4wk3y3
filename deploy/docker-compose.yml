@@ -80,10 +80,11 @@ services:
       # AND alembic/env.py, so app + migrations share one connection.
       ARGUS_DB_URL: "postgresql+psycopg://${POSTGRES_USER:-h4wk3y3}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-h4wk3y3}"
 
-    # Published on the HOST loopback only → not exposed to the internet.
-    # Reach it through an SSH tunnel (see header).
+    # Host bind address for the dashboard. Default 127.0.0.1 (loopback only —
+    # reach via SSH tunnel). Set H4_BIND=0.0.0.0 in .env to expose on the
+    # public IP (then restrict the port at the firewall + add TLS).
     ports:
-      - "127.0.0.1:${H4_DASHBOARD_PORT:-8000}:8000"
+      - "${H4_BIND:-127.0.0.1}:${H4_DASHBOARD_PORT:-8000}:8000"
 
     volumes:
       - ./volumes/output:/home/kali/h4wk3y3/output
