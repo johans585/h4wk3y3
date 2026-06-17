@@ -41,10 +41,21 @@ fi
 # subfinder provider keys (optional)
 [ -f volumes/subfinder/provider-config.yaml ] || touch volumes/subfinder/provider-config.yaml
 
-# Fix ownership if build.sh was run with sudo (volumes must be writable by UID 1000).
+# The container runs as UID 1000 (Dockerfile useradd -u 1000) and writes to the
+# bind-mounted volumes (data/, config/). The host user often has a different UID
+# (e.g. 1001), so make the volumes writable by the container: chown to 1000 via
+# sudo if available, otherwise fall back to world-writable.
 if [ "$(id -u)" = "0" ]; then
-  chown -R 1000:1000 volumes 2>/dev/null || true
+  chown -R 1000:1000 volumes
+elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  sudo chown -R 1000:1000 volumes
+elif command -v sudo >/dev/null 2>&1; then
+  echo "  • chowning volumes to UID 1000 (container user) — sudo password may be prompted"
+  sudo chown -R 1000:1000 volumes || chmod -R a+rwX volumes
+else
+  chmod -R a+rwX volumes
 fi
+echo "  ✓ volumes writable by the container (UID 1000)"
 
 # ── 3. Build ────────────────────────────────────────────────
 echo "▶ docker compose build (first build pulls kali base + bakes tools — a few minutes)"
