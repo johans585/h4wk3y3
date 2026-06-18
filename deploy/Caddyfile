@@ -1,9 +1,10 @@
 # h4wk3y3 — Caddy reverse proxy, hardened for internet exposure.
 #
 # H4_SITE_ADDRESS (.env) is a name resolved via a LOCAL hosts entry (no public
-# DNS), e.g. app.h4wk3y3.io → <vps-ip>. Because there is no public DNS, Let's
-# Encrypt can't validate it, so we use Caddy's INTERNAL CA (`tls internal`).
-# Install Caddy's root cert on your machine to trust it (see deploy README).
+# DNS), e.g. app.h4wk3y3.io → <vps-ip>. No public DNS → no Let's Encrypt, so we
+# serve a self-signed certificate (1-year, generated into volumes/caddy-certs/
+# and mounted at /certs). Install volumes/caddy-certs/cert.pem on your machine
+# to trust it (see deploy README).
 #
 # Defense in depth (in order):
 #   0. Bare-IP / wrong-Host traffic → 403 (the app is invisible to scanners).
@@ -13,19 +14,19 @@
 #   + TLS everywhere.
 
 {
-	# auto_https off would disable TLS; we keep it on with the internal issuer.
-	# Internal CA only — nothing is requested from a public ACME CA.
+	# Explicit self-signed cert per site → no ACME, no public CA contact.
+	# disable_redirects: don't bind :80 for HTTP→HTTPS (that port is gophish).
 	auto_https disable_redirects
 }
 
 # Catch-all: anything hitting the IP on 443 without the exact hostname gets 403.
 :443 {
-	tls internal
+	tls /certs/cert.pem /certs/key.pem
 	respond 403
 }
 
 {$H4_SITE_ADDRESS} {
-	tls internal
+	tls /certs/cert.pem /certs/key.pem
 
 	route {
 		# Gate 1 — mandatory secret header (static value from .env).

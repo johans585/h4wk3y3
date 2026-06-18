@@ -133,7 +133,8 @@ services:
       - "443:443/udp"      # HTTP/3
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - h4wk3y3-caddy-data:/data      # cert persistence (avoid LE rate limits)
+      - ./volumes/caddy-certs:/certs:ro   # self-signed cert.pem + key.pem
+      - h4wk3y3-caddy-data:/data
       - h4wk3y3-caddy-config:/config
     restart: unless-stopped
 

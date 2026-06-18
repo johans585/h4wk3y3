@@ -48,6 +48,19 @@ fi
 # subfinder provider keys (optional)
 [ -f volumes/subfinder/provider-config.yaml ] || touch volumes/subfinder/provider-config.yaml
 
+# Self-signed TLS cert for Caddy (1 year). The name has no public DNS (local
+# hosts entry), so Let's Encrypt can't issue — we serve this cert and you
+# install volumes/caddy-certs/cert.pem on your machine to trust it.
+mkdir -p volumes/caddy-certs
+if [ ! -f volumes/caddy-certs/cert.pem ]; then
+  SITE="$(grep -E '^H4_SITE_ADDRESS=' .env 2>/dev/null | cut -d= -f2)"; SITE="${SITE:-app.h4wk3y3.io}"
+  openssl req -x509 -newkey rsa:2048 -sha256 -days 365 -nodes \
+    -keyout volumes/caddy-certs/key.pem -out volumes/caddy-certs/cert.pem \
+    -subj "/CN=${SITE}" -addext "subjectAltName=DNS:${SITE}" >/dev/null 2>&1 \
+    && echo "  ✓ self-signed cert generated (1y) for ${SITE} → volumes/caddy-certs/" \
+    || echo "  ⚠ openssl failed — generate volumes/caddy-certs/{cert,key}.pem manually"
+fi
+
 # The container runs as UID 1000 (Dockerfile useradd -u 1000) and writes to the
 # bind-mounted volumes (data/, config/). The host user often has a different UID
 # (e.g. 1001), so make the volumes writable by the container: chown to 1000 via
